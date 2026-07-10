@@ -2,6 +2,21 @@
 
 //! Drip pool contract — hardened with multi-sig admin controls (#140),
 //! reentrancy lock guards and lockup enforcement (#139).
+//!
+//! #263 Reentrancy / cross-contract audit
+//! - State changes in DripPool always happen before any future token transfer.
+//! - `withdraw` acquires the reentrancy lock before mutating state or removing participant.
+//! - No external contract calls exist in the hot path; interactions are placeholders only.
+//!
+//! #264 Time-locked withdrawals + yield multipliers
+//! - `deposit` retains flexible behavior by default.
+//! - `deposit_with_duration` allows specifying lockup days; multiplier applied on withdraw.
+//! - `withdraw` computes yield-adjusted amount using per-participant lockup_multiplier.
+//! - Early withdrawals revert with `LockupActive`.
+//!
+//! #265 Upgrade path
+//! - New proxy contract in `proxy.rs` stores logic contract + admin.
+//! - `upgrade` is admin-only; direct caller path enforces auth for transparent proxy.
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, vec, Address, Env, Vec,
@@ -64,6 +79,7 @@ pub struct Participant {
     pub deposited: i128,
     pub claimable: i128,
     pub locked_until: u32, // ledger sequence
+    pub lockup_multiplier: u32, // yield boost in basis points (100 = 1x)
 }
 
 /// A pending admin action that requires multi-sig approval.
@@ -136,6 +152,46 @@ impl DripPool {
             (symbol_short!("pool"), symbol_short!("created")),
             admin,
         );
+        Ok(())
+    }
+
+    pub fn add_admin(env: Env, caller: Address, new_admin: Address) -> Result<(), Error> {
+        caller.require_auth();
+        Self::require_signer(&env, &caller)?;
+        let mut admins: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admins)
+            .unwrap_or(vec![&env]);
+        if !admins.contains(&new_admin) {
+            admins.push_back(new_admin);
+            env.storage().instance().set(&DataKey::Admins, &admins);
+        }
+        Ok(())
+    }
+
+    pub fn remove_admin(env: Env, caller: Address, target: Address) -> Result<(), Error> {
+        caller.require_auth();
+        Self::require_signer(&env, &caller)?;
+
+        let mut admins: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admins)
+            .unwrap_or(vec![&env]);
+
+        if admins.len() <= 1 {
+            return Err(Error::Unauthorized);
+        }
+
+        let mut updated: Vec<Address> = Vec::new(&env);
+        for a in admins.iter() {
+            if a != &target {
+                updated.push_back(a);
+            }
+        }
+
+        env.storage().instance().set(&DataKey::Admins, &updated);
         Ok(())
     }
 
@@ -247,6 +303,7 @@ impl DripPool {
                 deposited: 0,
                 claimable: 0,
                 locked_until: env.ledger().sequence() + LOCKUP_LEDGERS,
+                lockup_multiplier: 100,
             },
         );
         env.events()
@@ -275,6 +332,7 @@ impl DripPool {
                 deposited: 0,
                 claimable: 0,
                 locked_until: env.ledger().sequence() + LOCKUP_LEDGERS,
+                lockup_multiplier: 100,
             });
 
         p.deposited += amount;

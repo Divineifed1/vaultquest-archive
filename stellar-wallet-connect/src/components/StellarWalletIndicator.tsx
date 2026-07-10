@@ -19,12 +19,70 @@ import {
 import {
   connectWallet,
   disconnectWallet,
+  getConnectedNetwork,
   initializeConnection,
   getWalletHealth,
+  setConnection,
 } from "../core/walletService.js";
 import { truncateAddress } from "../vault/lib/format.js";
+import { EXPECTED_NETWORK } from "../lib/wallets.js";
 
 const BALANCE_REFRESH_MS = 30_000;
+const EXTERNAL_POLL_MS = 10_000;
+
+function normalizeWalletResult(
+  result: unknown,
+): string | null {
+  if (!result) return null;
+  if (typeof result === "string") return result;
+  const r = result as Record<string, unknown>;
+  return (r.address as string) || (r.publicKey as string) || null;
+}
+
+async function readExternalFreighterAddress(): Promise<string | null | ""> {
+  if (typeof window === "undefined") return null;
+
+  const api =
+    (window as unknown as Record<string, unknown>).freighterApi ??
+    (window as unknown as Record<string, unknown>).freighter;
+  if (!api) return null;
+
+  const a = api as Record<string, unknown>;
+
+  try {
+    if (typeof a.isAllowed === "function") {
+      const allowed = await a.isAllowed();
+      const isAllowed =
+        typeof allowed === "boolean"
+          ? allowed
+          : (allowed as Record<string, unknown>)?.isAllowed;
+      if (isAllowed === false) return "";
+    }
+
+    if (typeof a.isConnected === "function") {
+      const connected = await a.isConnected();
+      const isConnected =
+        typeof connected === "boolean"
+          ? connected
+          : (connected as Record<string, unknown>)?.isConnected;
+      if (isConnected === false) return "";
+    }
+
+    if (typeof a.getPublicKey === "function") {
+      return normalizeWalletResult(await a.getPublicKey());
+    }
+
+    if (typeof a.getAddress === "function") {
+      return normalizeWalletResult(
+        await a.getAddress({ skipRequestAccess: true }),
+      );
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
 
 export const StellarWalletIndicator: FC = () => {
   const publicKey = useStore(connectedPublicKey);
@@ -64,18 +122,68 @@ export const StellarWalletIndicator: FC = () => {
     return () => clearInterval(interval);
   }, [publicKey, fetchBalance]);
 
+  const checkExternalConnection = useCallback(async () => {
+    try {
+      const externalAddress = await readExternalFreighterAddress();
+
+      if (externalAddress === "" && connectedPublicKey.get()) {
+        await disconnectWallet();
+        return;
+      }
+
+      if (externalAddress && externalAddress !== connectedPublicKey.get()) {
+        setConnection(externalAddress, "freighter");
+        fetchBalance();
+        return;
+      }
+
+      if (connectedPublicKey.get()) {
+        const activeNetwork = await getConnectedNetwork();
+        connectedNetwork.set(activeNetwork);
+        isNetworkMismatch.set(activeNetwork !== EXPECTED_NETWORK);
+      }
+    } catch {
+      // silent
+    }
+  }, [fetchBalance]);
+
   useEffect(() => {
-    const handleVisibility = () => {
+    checkExternalConnection();
+
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === "publicKey" || event.key === "walletProvider") {
+        initializeConnection();
+        checkExternalConnection();
+      }
+    };
+
+    const onFocus = () => checkExternalConnection();
+    const onVisibilityChange = () => {
       if (document.visibilityState === "visible") {
         const storedKey = localStorage.getItem("publicKey");
         if (!storedKey && connectedPublicKey.get()) {
           disconnectWallet();
+          return;
         }
+        checkExternalConnection();
       }
     };
-    document.addEventListener("visibilitychange", handleVisibility);
-    return () => document.removeEventListener("visibilitychange", handleVisibility);
-  }, []);
+
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    const pollInterval = window.setInterval(
+      checkExternalConnection,
+      EXTERNAL_POLL_MS,
+    );
+
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.clearInterval(pollInterval);
+    };
+  }, [checkExternalConnection]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {

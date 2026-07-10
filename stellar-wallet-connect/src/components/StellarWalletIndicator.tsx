@@ -33,7 +33,7 @@ const EXTERNAL_POLL_MS = 10_000;
 function normalizeWalletResult(
   result: unknown,
 ): string | null {
-  if (!result) return null;
+  if (result === null || result === undefined) return null;
   if (typeof result === "string") return result;
   const r = result as Record<string, unknown>;
   return (r.address as string) || (r.publicKey as string) || null;
@@ -95,6 +95,7 @@ export const StellarWalletIndicator: FC = () => {
   const [copiedStatus, setCopiedStatus] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const suppressedAddressRef = useRef<string | null>(null);
 
   const isConnected = Boolean(publicKey);
 
@@ -129,6 +130,14 @@ export const StellarWalletIndicator: FC = () => {
       if (externalAddress === "" && connectedPublicKey.get()) {
         await disconnectWallet();
         return;
+      }
+
+      // Suppress re-adopting an address the user explicitly disconnected
+      if (externalAddress && suppressedAddressRef.current) {
+        if (externalAddress === suppressedAddressRef.current) {
+          return;
+        }
+        suppressedAddressRef.current = null;
       }
 
       if (externalAddress && externalAddress !== connectedPublicKey.get()) {
@@ -201,6 +210,7 @@ export const StellarWalletIndicator: FC = () => {
   const handleConnect = useCallback(async () => {
     setIsConnecting(true);
     setError(null);
+    suppressedAddressRef.current = null;
     try {
       await connectWallet("freighter");
     } catch (err: any) {
@@ -212,6 +222,7 @@ export const StellarWalletIndicator: FC = () => {
 
   const handleDisconnect = useCallback(async () => {
     setIsDropdownOpen(false);
+    suppressedAddressRef.current = connectedPublicKey.get();
     try {
       await disconnectWallet();
     } catch {

@@ -134,7 +134,14 @@ export default function VaultsPage() {
             <h1 className="text-3xl font-bold text-vault-text">Vaults</h1>
             <p className="mt-3 max-w-2xl text-vault-muted">
               Manage your pool positions and drip deposits. Review live fee tiers
-              before you submit a transaction.
+              before you submit a transaction. Learn more about our{" "}
+              <Link
+                href="/app/vaults/strategies"
+                className="text-vault-accent underline hover:text-vault-accent/80 font-medium"
+              >
+                Vault Strategies
+              </Link>
+              .
             </p>
           </div>
           <Link href="/app/vaults/archive" className="vq-btn-ghost self-start">
@@ -188,13 +195,21 @@ export default function VaultsPage() {
                 </p>
               </div>
 
-              <button
-                type="button"
-                onClick={() => setIsDepositModalOpen(true)}
-                className="vq-btn-primary mt-6 self-start"
-              >
-                Open deposit modal
-              </button>
+              <div className="mt-6 flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  onClick={() => setIsDepositModalOpen(true)}
+                  className="vq-btn-primary"
+                >
+                  Open deposit modal
+                </button>
+                <Link
+                  href="/app/vaults/planner"
+                  className="vq-btn-ghost"
+                >
+                  Recurring Planner
+                </Link>
+              </div>
             </section>
           </div>
 

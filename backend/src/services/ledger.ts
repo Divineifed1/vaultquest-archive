@@ -1,5 +1,5 @@
 import { Prisma } from "@prisma/client";
-import type { PrismaClient } from "@prisma/client";
+import type { PrismaClient, IndexerCheckpoint } from "@prisma/client";
 import { ERROR_CODES } from "../constants.js";
 import { AppError } from "../errors.js";
 import type { IntentInput, ActionRecord } from "../types.js";
@@ -9,6 +9,7 @@ import type { CacheService } from "./cacheService.js";
 export type ListActionsParams = {
   walletAddress: string;
   status?: ActionStatus;
+  type?: string;
   limit: number;
   cursor?: string | null;
 };
@@ -85,6 +86,16 @@ export class LedgerService {
       }
     });
     return created as unknown as ActionRecord;
+  }
+
+  async getIndexerCheckpoint(): Promise<Partial<IndexerCheckpoint> | null> {
+    if (this.cacheService) {
+      return this.cacheService.getCheckpoint();
+    }
+
+    return this.prisma.indexerCheckpoint.findUnique({
+      where: { id: "singleton" }
+    });
   }
 
   async attachTxHash(id: string, txHash: string): Promise<ActionRecord> {
@@ -193,10 +204,16 @@ export class LedgerService {
   }
 
   async listActions(params: ListActionsParams): Promise<ListActionsResult> {
-    const { walletAddress, status, limit, cursor } = params;
+    const { walletAddress, status, type, limit, cursor } = params;
+
+    const where = {
+      walletAddress,
+      ...(status !== undefined && { status }),
+      ...(type !== undefined && { actionType: type as ActionStatus })
+    };
 
     const rows = await this.prisma.actionLedger.findMany({
-      where: { walletAddress, ...(status !== undefined && { status }) },
+      where,
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: limit + 1,
       ...(cursor != null && { cursor: { id: cursor }, skip: 1 })
@@ -207,32 +224,6 @@ export class LedgerService {
     const nextCursor = hasMore ? (items[items.length - 1]?.id ?? null) : null;
 
     return { items: items as unknown as ActionRecord[], nextCursor };
-  }
-
-  async getHistoryPaginated(params: {
-    walletAddress: string;
-    status?: ActionStatus;
-    type?: string;
-    skip: number;
-    limit: number;
-  }): Promise<{ items: ActionRecord[]; total: number }> {
-    const { walletAddress, status, type, skip, limit } = params;
-    
-    const whereClause: any = { walletAddress };
-    if (status) whereClause.status = status;
-    if (type) whereClause.actionType = type;
-
-    const [total, rows] = await this.prisma.$transaction([
-      this.prisma.actionLedger.count({ where: whereClause }),
-      this.prisma.actionLedger.findMany({
-        where: whereClause,
-        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-        skip,
-        take: limit,
-      }),
-    ]);
-
-    return { items: rows as unknown as ActionRecord[], total };
   }
 
 
@@ -461,16 +452,28 @@ export class LedgerService {
 
   async updateIndexerCheckpoint(input: {
     latestLedger: number;
+    lastProcessedEventId?: string | null;
     lastError?: string | null;
     success: boolean;
   }): Promise<any> {
     const now = new Date();
+    const needsExisting =
+      input.lastProcessedEventId === undefined || (!input.success && input.lastError === undefined);
+    const existing = needsExisting ? await this.getIndexerCheckpoint() : null;
+    const lastProcessedEventId =
+      input.lastProcessedEventId !== undefined
+        ? input.lastProcessedEventId
+        : existing?.lastProcessedEventId ?? null;
+    const lastError = input.success
+      ? null
+      : input.lastError !== undefined
+        ? input.lastError
+        : existing?.lastError ?? null;
     if (this.cacheService) {
-      const existing = await this.cacheService.getCheckpoint();
       const lastSuccessSyncTime = input.success ? now : (existing?.lastSuccessSyncTime ?? now);
-      const lastError = input.lastError !== undefined ? input.lastError : (existing?.lastError ?? null);
       await this.cacheService.setCheckpoint({
         latestLedger: input.latestLedger,
+        lastProcessedEventId,
         lastSyncTime: now,
         lastSuccessSyncTime,
         lastError
@@ -483,14 +486,16 @@ export class LedgerService {
       create: {
         id: "singleton",
         latestLedger: input.latestLedger,
+        lastProcessedEventId,
         lastSyncTime: now,
-        lastError: input.lastError || null,
+        lastError,
         lastSuccessSyncTime: input.success ? now : undefined
       },
       update: {
         latestLedger: input.latestLedger,
+        lastProcessedEventId,
         lastSyncTime: now,
-        lastError: input.lastError !== undefined ? input.lastError : undefined,
+        lastError,
         lastSuccessSyncTime: input.success ? now : undefined
       }
     });
@@ -510,6 +515,7 @@ export class LedgerService {
       return {
         status: "degraded",
         latest_ledger: 0,
+        last_processed_event_id: null,
         last_sync_time: null,
         last_success_sync_time: null,
         last_error: null,
@@ -536,6 +542,7 @@ export class LedgerService {
     return {
       status,
       latest_ledger: checkpoint.latestLedger,
+      last_processed_event_id: checkpoint.lastProcessedEventId ?? null,
       last_sync_time: checkpoint.lastSyncTime || now,
       last_success_sync_time: lastSuccessSyncTime,
       last_error: checkpoint.lastError,

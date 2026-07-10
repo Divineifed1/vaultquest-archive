@@ -10,6 +10,7 @@
     "dev": "tsx watch src/server.ts",
     "build": "prisma generate && tsc -p tsconfig.json",
     "start": "node dist/server.js",
+    "db:backup": "tsx src/scripts/backup.ts",
     "lint": "eslint \"src/**/*.ts\" \"tests/**/*.ts\"",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -27,6 +28,7 @@
     "node-cron": "^3.0.3",
     "pino": "^9.5.0",
     "pino-pretty": "^11.3.0",
+    "prom-client": "^15.1.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {

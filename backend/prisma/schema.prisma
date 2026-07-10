@@ -45,6 +45,8 @@ model ActionLedger {
 
   @@index([walletAddress, createdAt(sort: Desc)])
   @@index([status, updatedAt])
+  @@index([walletAddress, actionType])
+  @@index([status, createdAt(sort: Desc)])
   @@map("action_ledger")
 }
 
@@ -56,12 +58,14 @@ model PendingEvent {
   receivedAt      DateTime  @default(now()) @map("received_at")
   consumedAt      DateTime? @map("consumed_at")
 
+  @@index([statusHint, receivedAt])
   @@map("pending_events")
 }
 
 model IndexerCheckpoint {
   id                  String   @id @default("singleton")
   latestLedger        Int      @map("latest_ledger")
+  lastProcessedEventId String?  @map("last_processed_event_id")
   lastSyncTime        DateTime @map("last_sync_time")
   lastError           String?  @map("last_error")
   lastSuccessSyncTime DateTime @default(now()) @map("last_success_sync_time")
@@ -86,6 +90,7 @@ model VaultSettlement {
   updatedAt      DateTime  @updatedAt @map("updated_at")
 
   @@index([state, updatedAt])
+  @@index([recipient, state])
   @@map("vault_settlements")
 }
 
@@ -127,5 +132,6 @@ model SavedPool {
 
   @@unique([walletAddress, poolId])
   @@index([walletAddress, createdAt(sort: Desc)])
+  @@index([poolId])
   @@map("saved_pools")
 }

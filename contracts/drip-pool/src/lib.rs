@@ -33,6 +33,7 @@ use soroban_sdk::{
 };
 
 pub mod vault;
+pub mod proxy;
 
 // ── Lockup duration (ledgers, ~7 days at 5 s/ledger) ──────────────────────
 const LOCKUP_LEDGERS: u32 = 120_960;
@@ -727,3 +728,6 @@ impl DripPool {
 
 #[cfg(test)]
 mod test;
+
+#[cfg(test)]
+mod benchmarks;

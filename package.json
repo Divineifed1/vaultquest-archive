@@ -11,12 +11,13 @@
     "lint": "next lint",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check:terms": "node ./scripts/check-product-terms.js",
-    "docs:validate": "node ./scripts/validate-docs.js"
+    "test:conformance": "cd contracts/drip-pool && npx vitest run",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:headed": "playwright test --headed",
-    "check:terms": "node ./scripts/check-product-terms.js"
+    "check:terms": "node ./scripts/check-product-terms.js",
+    "docs:validate": "node ./scripts/validate-docs.js",
+    "fixtures:regenerate": "node scripts/regenerate-fixtures.js"
   },
   "dependencies": {
     "@radix-ui/react-accordion": "^1.2.12",

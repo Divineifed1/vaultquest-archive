@@ -12,11 +12,11 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "check:terms": "node ./scripts/check-product-terms.js",
-    "docs:validate": "node ./scripts/validate-docs.js"
+    "docs:validate": "node ./scripts/validate-docs.js",
+    "generate:manifest": "npx tsx scripts/generate-manifest.ts",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
-    "test:e2e:headed": "playwright test --headed",
-    "check:terms": "node ./scripts/check-product-terms.js"
+    "test:e2e:headed": "playwright test --headed"
   },
   "dependencies": {
     "@radix-ui/react-accordion": "^1.2.12",
@@ -35,7 +35,8 @@
     "react-window": "^2.2.7",
     "recharts": "^3.8.1",
     "viem": "^2.21.54",
-    "wagmi": "^2.14.6"
+    "wagmi": "^2.14.6",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0",

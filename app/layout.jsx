@@ -1,10 +1,28 @@
 import "@/styles/globals.css";
 import Providers from "@/components/providers/Providers";
+import AttestationProvider from "@/components/AttestationProvider";
 import { Toaster } from "react-hot-toast";
+import { readFileSync } from "fs";
+import { resolve } from "path";
+
+let manifestVersion = "";
+let manifestEnvironment = "";
+try {
+  const manifestPath = resolve(process.cwd(), "deployment-manifest.json");
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
+  manifestVersion = manifest.version || "";
+  manifestEnvironment = manifest.environment || "";
+} catch {
+  // Manifest not available at build time
+}
 
 export const metadata = {
   title: "VaultQuest — No-loss prize savings",
   description: "Deposit, earn yield, and win prizes without risking your principal.",
+  other: {
+    "deployment-version": manifestVersion,
+    "deployment-environment": manifestEnvironment,
+  },
 };
 
 export default function RootLayout({ children }) {
@@ -16,9 +34,14 @@ export default function RootLayout({ children }) {
             __html: `try{if(localStorage.getItem("vaultquest-high-contrast")==="true"){document.documentElement.classList.add("high-contrast")}}catch(e){}`,
           }}
         />
+        {manifestVersion && (
+          <meta name="deployment-version" content={manifestVersion} />
+        )}
       </head>
       <body>
-        <Providers>{children}</Providers>
+        <AttestationProvider>
+          <Providers>{children}</Providers>
+        </AttestationProvider>
         <Toaster position="bottom-right" />
       </body>
     </html>

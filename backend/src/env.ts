@@ -20,6 +20,9 @@ const schema = z.object({
   // polls the Soroban RPC for the listed contracts' events.
   SOROBAN_RPC_URL: z.string().url().optional(),
   INDEXER_CONTRACT_IDS: z.string().optional(),
+  // Deployment manifest attestation
+  NETWORK_PASSPHRASE: z.string().min(1).optional(),
+  DEPLOYMENT_MANIFEST_PATH: z.string().optional(),
   /**
    * API key for external/third-party service endpoints (issue #273).
    * When set, all `/api/*` routes require `X-Api-Key: <value>`.
@@ -70,6 +73,8 @@ export function getEnv(): Env {
       NODE_ENV: (process.env.NODE_ENV ?? "development") as Env["NODE_ENV"],
       SOROBAN_RPC_URL: process.env.SOROBAN_RPC_URL || undefined,
       INDEXER_CONTRACT_IDS: process.env.INDEXER_CONTRACT_IDS || undefined,
+      NETWORK_PASSPHRASE: process.env.NETWORK_PASSPHRASE || undefined,
+      DEPLOYMENT_MANIFEST_PATH: process.env.DEPLOYMENT_MANIFEST_PATH || undefined,
       API_KEY: process.env.API_KEY || undefined,
       BACKUP_DIR: process.env.BACKUP_DIR || undefined,
       BACKUP_RETAIN_DAYS: Number(process.env.BACKUP_RETAIN_DAYS ?? 7),

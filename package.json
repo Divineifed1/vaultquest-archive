@@ -16,6 +16,11 @@
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:headed": "playwright test --headed"
+    "test:conformance": "cd contracts/drip-pool && npx vitest run",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:headed": "playwright test --headed",
+    "fixtures:regenerate": "node scripts/regenerate-fixtures.js"
   },
   "dependencies": {
     "@radix-ui/react-accordion": "^1.2.12",

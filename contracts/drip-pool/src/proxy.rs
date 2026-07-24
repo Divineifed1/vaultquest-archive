@@ -48,22 +48,16 @@ impl VaultProxy {
         Ok(())
     }
 
-    /// Upgrade the logic contract address. Only callable by admin.
-    pub fn upgrade(env: Env, new_logic: Address) -> Result<(), Error> {
+    /// Upgrade the logic contract address. Only callable by the stored admin.
+    pub fn upgrade(env: Env, caller: Address, new_logic: Address) -> Result<(), Error> {
+        caller.require_auth();
         let admin: Address = env
             .storage()
             .instance()
             .get(&DataKey::Admin)
             .ok_or(Error::NotInitialized)?;
 
-        // Proxy admin pattern: require auth from current storage admin
-        // Transparent proxy: msg.sender is the proxy itself for delegated calls
-        let caller = env.current_contract_address();
-        
-        // In transparent proxy, we call via the proxy's own invoke
-        // The admin check is done by comparing stored admin with caller
         if admin != caller {
-            // This path is for direct calls - must be the admin
             return Err(Error::Unauthorized);
         }
 

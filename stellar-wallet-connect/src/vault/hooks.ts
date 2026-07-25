@@ -406,3 +406,64 @@ export function useActivityExport(): ActivityExportResult {
 
   return { state, trigger, reset };
 }
+
+// --- Issue #390: Persistent transaction state across reloads ---
+
+export interface PersistedTxState {
+  network: string;
+  walletAddress: string;
+  contract: string;
+  action: string;
+  idempotencyKey: string;
+  stage: TimelineStage;
+  txHash?: string;
+  failedAtStage?: "preparing" | "awaiting-signature" | "submitting" | "confirming" | "indexing";
+  errorMessage?: string;
+}
+
+const TX_STATE_STORAGE_KEY = "vaultquest_pending_tx_state";
+
+export function usePersistedTxState(): {
+  state: PersistedTxState | null;
+  save: (state: PersistedTxState) => void;
+  clear: () => void;
+  canResume: (network: string, walletAddress: string, contract: string) => boolean;
+} {
+  const [state, setState] = useState<PersistedTxState | null>(() => {
+    if (typeof window === "undefined") return null;
+    try {
+      const raw = localStorage.getItem(TX_STATE_STORAGE_KEY);
+      if (!raw) return null;
+      return JSON.parse(raw) as PersistedTxState;
+    } catch {
+      return null;
+    }
+  });
+
+  const save = useCallback((next: PersistedTxState) => {
+    try {
+      localStorage.setItem(TX_STATE_STORAGE_KEY, JSON.stringify(next));
+      setState(next);
+    } catch {
+      // Storage full or disabled; continue without persistence.
+    }
+  }, []);
+
+  const clear = useCallback(() => {
+    try {
+      localStorage.removeItem(TX_STATE_STORAGE_KEY);
+    } catch {}
+    setState(null);
+  }, []);
+
+  const canResume = useCallback(
+    (network: string, walletAddress: string, contract: string) => {
+      if (!state) return false;
+      return state.network === network && state.walletAddress === walletAddress && state.contract === contract;
+    },
+    [state],
+  );
+
+  return { state, save, clear, canResume };
+}
+

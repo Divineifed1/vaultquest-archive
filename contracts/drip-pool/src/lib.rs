@@ -32,8 +32,8 @@ use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, vec, Address, Env, Vec,
 };
 
-pub mod vault;
 pub mod proxy;
+pub mod vault;
 
 // ── Lockup duration (ledgers, ~7 days at 5 s/ledger) ──────────────────────
 const LOCKUP_LEDGERS: u32 = 120_960;
@@ -55,11 +55,11 @@ const DEFAULT_THRESHOLD: u32 = 2;
 #[contracttype]
 pub enum DataKey {
     Admin,
-    Admins,           // Vec<Address> — approved signers
-    Threshold,        // u32 — current multisig threshold
+    Admins,    // Vec<Address> — approved signers
+    Threshold, // u32 — current multisig threshold
     Pool,
     Participant(Address),
-    Proposal(u32),    // pending admin proposal
+    Proposal(u32), // pending admin proposal
 }
 
 // ── Errors ─────────────────────────────────────────────────────────────────
@@ -68,18 +68,18 @@ pub enum DataKey {
 #[repr(u32)]
 pub enum Error {
     AlreadyInitialized = 1,
-    NotInitialized     = 2,
-    AlreadyJoined      = 3,
-    NotJoined          = 4,
-    InvalidAmount      = 5,
-    Locked             = 6,   // reentrancy
-    LockupActive       = 7,   // withdrawal before lockup ends
-    Unauthorized       = 8,   // not an approved signer
-    ThresholdNotMet    = 9,   // not enough signatures
-    AlreadySigned      = 10,  // signer already approved this proposal
-    ProposalNotFound   = 11,
-    ProposalExpired    = 12,  // proposal ledger deadline passed
-    InvalidAction      = 13,  // payload fails reserve or signer-count checks
+    NotInitialized = 2,
+    AlreadyJoined = 3,
+    NotJoined = 4,
+    InvalidAmount = 5,
+    Locked = 6,          // reentrancy
+    LockupActive = 7,    // withdrawal before lockup ends
+    Unauthorized = 8,    // not an approved signer
+    ThresholdNotMet = 9, // not enough signatures
+    AlreadySigned = 10,  // signer already approved this proposal
+    ProposalNotFound = 11,
+    ProposalExpired = 12, // proposal ledger deadline passed
+    InvalidAction = 13,   // payload fails reserve or signer-count checks
 }
 
 // ── Structs ────────────────────────────────────────────────────────────────
@@ -112,7 +112,7 @@ pub struct Participant {
 pub struct Proposal {
     pub action: ProposalAction,
     pub approvals: Vec<Address>,
-    pub expires_at: u32,              // ledger sequence; approvals rejected after this (#383)
+    pub expires_at: u32, // ledger sequence; approvals rejected after this (#383)
     pub approver_snapshot: Vec<Address>, // admin set frozen at proposal creation (#384)
 }
 
@@ -122,7 +122,7 @@ pub enum ProposalAction {
     ReleaseEscrow(Address, i128), // recipient, amount
     AddAdmin(Address),
     RemoveAdmin(Address),
-    SetThreshold(u32),            // change the approval threshold (#383)
+    SetThreshold(u32), // change the approval threshold (#383)
 }
 
 // ── Contract ───────────────────────────────────────────────────────────────
@@ -200,13 +200,13 @@ impl DripPool {
         let admins: Vec<Address> = vec![&env, admin.clone()];
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Admins, &admins);
-        env.storage().instance().set(&DataKey::Threshold, &DEFAULT_THRESHOLD);
+        env.storage()
+            .instance()
+            .set(&DataKey::Threshold, &DEFAULT_THRESHOLD);
         env.storage().instance().set(&DataKey::Pool, &pool);
         Self::bump_instance(&env);
-        env.events().publish(
-            (symbol_short!("pool"), symbol_short!("created")),
-            admin,
-        );
+        env.events()
+            .publish((symbol_short!("pool"), symbol_short!("created")), admin);
         Ok(())
     }
 
@@ -432,18 +432,14 @@ impl DripPool {
         }
 
         let key = DataKey::Participant(who.clone());
-        let mut p: Participant = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .unwrap_or(Participant {
-                joined_at: env.ledger().timestamp(),
-                deposited: 0,
-                claimable: 0,
-                locked_until: env.ledger().sequence() + LOCKUP_LEDGERS,
-                lockup_multiplier: 100,
-                yield_accrued: 0,
-            });
+        let mut p: Participant = env.storage().persistent().get(&key).unwrap_or(Participant {
+            joined_at: env.ledger().timestamp(),
+            deposited: 0,
+            claimable: 0,
+            locked_until: env.ledger().sequence() + LOCKUP_LEDGERS,
+            lockup_multiplier: 100,
+            yield_accrued: 0,
+        });
 
         p.deposited += amount;
         p.claimable += amount;

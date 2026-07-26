@@ -62,7 +62,8 @@ pub enum DataKey {
     Admins,    // Vec<Address> — approved signers
     Threshold, // u32 — current multisig threshold
     Pool,
-    Participant(Address),
+    Participant(Address),       // V2 participant storage (#377)
+    ParticipantV1(Address),     // legacy V1 participant storage (migration source)
     Proposal(u32), // pending admin proposal
     Token,        // Address — accepted Stellar Asset Contract address (#376)
 }
@@ -105,13 +106,26 @@ pub struct Pool {
 
 #[derive(Clone, Debug, PartialEq)]
 #[contracttype]
-pub struct Participant {
+pub struct ParticipantV1 {
     pub joined_at: u64,
     pub deposited: i128,
     pub claimable: i128,
     pub locked_until: u32,
-    pub lockup_multiplier: u32, // reward weight in bps (100 = baseline) — not a principal multiplier
-    pub yield_accrued: i128,    // realized yield credited to this participant (#382)
+    pub lockup_multiplier: u32,
+    pub yield_accrued: i128,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+#[contracttype]
+pub struct Participant {
+    pub joined_at: u64,
+    pub deposited: i128,             // total principal deposited
+    pub locked_until: u32,
+    pub lockup_multiplier: u32,      // reward weight in bps — not a principal multiplier
+    pub yield_accrued: i128,         // realized yield credited by admin (#382)
+    pub prize: i128,                 // prize winnings from draw_winner (#377)
+    pub claimed_reward: i128,        // cumulative rewards already claimed (#377)
+    pub withdrawn_principal: i128,   // cumulative principal already withdrawn (#377)
 }
 
 /// A pending admin action that requires multi-sig approval.
@@ -188,6 +202,52 @@ impl DripPool {
         env.storage()
             .persistent()
             .extend_ttl(key, PERSISTENT_TTL_THRESHOLD, PERSISTENT_TTL_EXTEND);
+    }
+
+    // ── Participant migration helpers (#377) ─────────────────────────────
+
+    /// Load a V2 participant, migrating from V1 on first access.
+    fn load_participant(env: &Env, who: &Address) -> Result<Participant, Error> {
+        let key = DataKey::Participant(who.clone());
+        if let Some(p) = env.storage().persistent().get::<DataKey, Participant>(&key) {
+            Self::bump_participant(env, &key);
+            return Ok(p);
+        }
+        let v1_key = DataKey::ParticipantV1(who.clone());
+        if let Some(old) = env.storage().persistent().get::<DataKey, ParticipantV1>(&v1_key) {
+            let new_p = Participant {
+                joined_at: old.joined_at,
+                deposited: old.deposited,
+                locked_until: old.locked_until,
+                lockup_multiplier: old.lockup_multiplier,
+                yield_accrued: old.yield_accrued,
+                prize: 0,
+                claimed_reward: 0,
+                withdrawn_principal: 0,
+            };
+            env.storage().persistent().set(&key, &new_p);
+            env.storage().persistent().remove(&v1_key);
+            Self::bump_participant(env, &key);
+            return Ok(new_p);
+        }
+        Err(Error::NotJoined)
+    }
+
+    /// Save a V2 participant and clean up any legacy V1 key.
+    fn save_participant(env: &Env, who: &Address, p: &Participant) {
+        let key = DataKey::Participant(who.clone());
+        env.storage().persistent().set(&key, p);
+        env.storage().persistent().remove(&DataKey::ParticipantV1(who.clone()));
+        Self::bump_participant(env, &key);
+    }
+
+    /// Check if a participant exists (V2 or V1 legacy) without loading the full struct.
+    fn has_participant(env: &Env, who: &Address) -> bool {
+        let key = DataKey::Participant(who.clone());
+        if env.storage().persistent().has(&key) {
+            return true;
+        }
+        env.storage().persistent().has(&DataKey::ParticipantV1(who.clone()))
     }
 
     // ── Token helpers (#376) ──────────────────────────────────────────────
@@ -458,22 +518,20 @@ impl DripPool {
     // ── Join ───────────────────────────────────────────────────────────────
     pub fn join(env: Env, who: Address) -> Result<(), Error> {
         who.require_auth();
-        let key = DataKey::Participant(who.clone());
-        if env.storage().persistent().has(&key) {
+        if Self::has_participant(&env, &who) {
             return Err(Error::AlreadyJoined);
         }
-        env.storage().persistent().set(
-            &key,
-            &Participant {
-                joined_at: env.ledger().timestamp(),
-                deposited: 0,
-                claimable: 0,
-                locked_until: env.ledger().sequence() + LOCKUP_LEDGERS,
-                lockup_multiplier: 100,
-                yield_accrued: 0,
-            },
-        );
-        Self::bump_participant(&env, &key);
+        let p = Participant {
+            joined_at: env.ledger().timestamp(),
+            deposited: 0,
+            locked_until: env.ledger().sequence() + LOCKUP_LEDGERS,
+            lockup_multiplier: 100,
+            yield_accrued: 0,
+            prize: 0,
+            claimed_reward: 0,
+            withdrawn_principal: 0,
+        };
+        Self::save_participant(&env, &who, &p);
         Self::bump_instance(&env);
         env.events()
             .publish((symbol_short!("pool"), symbol_short!("joined")), who);
@@ -491,9 +549,10 @@ impl DripPool {
             return Err(Error::InvalidAmount);
         }
 
-        // Snapshot pre-transfer state for rollback on failure
-        let key = DataKey::Participant(who.clone());
-        let old_participant: Option<Participant> = env.storage().persistent().get(&key);
+        let old_participant: Option<Participant> = {
+            let key = DataKey::Participant(who.clone());
+            env.storage().persistent().get(&key)
+        };
         let old_pool: Pool = env
             .storage()
             .instance()
@@ -504,20 +563,20 @@ impl DripPool {
         let contract_addr = env.current_contract_address();
         Self::transfer_tokens(&env, &who, &contract_addr, &amount)?;
 
-        // Update participant state
-        let mut p: Participant = old_participant.unwrap_or(Participant {
+        // Update participant state — deposit only adds to principal (#377)
+        let mut p = old_participant.unwrap_or(Participant {
             joined_at: env.ledger().timestamp(),
             deposited: 0,
-            claimable: 0,
             locked_until: env.ledger().sequence() + LOCKUP_LEDGERS,
             lockup_multiplier: 100,
             yield_accrued: 0,
+            prize: 0,
+            claimed_reward: 0,
+            withdrawn_principal: 0,
         });
 
         p.deposited += amount;
-        p.claimable += amount;
-        env.storage().persistent().set(&key, &p);
-        Self::bump_participant(&env, &key);
+        Self::save_participant(&env, &who, &p);
 
         // Update pool accounting
         let mut pool: Pool = old_pool;
@@ -579,12 +638,11 @@ impl DripPool {
         Self::acquire_lock(&mut pool)?;
         env.storage().instance().set(&DataKey::Pool, &pool);
 
-        let (principal, yield_earned) = vault::apply_withdrawal(&env, &who)?;
-        let amount = principal + yield_earned;
+        let principal = vault::apply_withdrawal(&env, &who)?;
 
         // Transfer tokens from contract to caller (#376)
         let contract_addr = env.current_contract_address();
-        let transfer_result = Self::transfer_tokens(&env, &contract_addr, &who, &amount);
+        let transfer_result = Self::transfer_tokens(&env, &contract_addr, &who, &principal);
 
         let mut pool: Pool = env
             .storage()
@@ -594,21 +652,18 @@ impl DripPool {
         Self::release_lock(&mut pool);
 
         if let Err(e) = transfer_result {
-            // Rollback: re-insert the participant (apply_withdrawal already removed it)
-            // and release the lock. The token transfer failed, so no funds moved.
-            let key = DataKey::Participant(who.clone());
-            env.storage().persistent().set(
-                &key,
-                &Participant {
-                    joined_at: env.ledger().timestamp(),
-                    deposited: principal,
-                    claimable: 0,
-                    locked_until: env.ledger().sequence() + LOCKUP_LEDGERS,
-                    lockup_multiplier: 100,
-                    yield_accrued: yield_earned,
-                },
-            );
-            Self::bump_participant(&env, &key);
+            // Rollback: re-insert the participant with original principal
+            let p = Participant {
+                joined_at: env.ledger().timestamp(),
+                deposited: principal,
+                locked_until: env.ledger().sequence() + LOCKUP_LEDGERS,
+                lockup_multiplier: 100,
+                yield_accrued: 0,
+                prize: 0,
+                claimed_reward: 0,
+                withdrawn_principal: 0,
+            };
+            Self::save_participant(&env, &who, &p);
             env.storage().instance().set(&DataKey::Pool, &pool);
             Self::bump_instance(&env);
             return Err(e);
@@ -619,9 +674,9 @@ impl DripPool {
 
         env.events().publish(
             (symbol_short!("pool"), symbol_short!("withdrawn")),
-            (who, amount),
+            (who, principal),
         );
-        Ok(amount)
+        Ok(principal)
     }
 
     // ── Claim ──────────────────────────────────────────────────────────────
@@ -632,35 +687,23 @@ impl DripPool {
     pub fn claim_reward(env: Env, who: Address) -> Result<i128, Error> {
         who.require_auth();
 
-        let key = DataKey::Participant(who.clone());
-        let mut p: Participant = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .ok_or(Error::NotJoined)?;
-
-        let amount = p.claimable;
-        p.claimable = 0;
-        env.storage().persistent().set(&key, &p);
-        Self::bump_participant(&env, &key);
+        let mut p = Self::load_participant(&env, &who)?;
+        let available = (p.yield_accrued + p.prize) - p.claimed_reward;
+        p.claimed_reward += available;
+        Self::save_participant(&env, &who, &p);
 
         env.events().publish(
             (symbol_short!("pool"), symbol_short!("claimed")),
-            (who, amount),
+            (who, available),
         );
-        Ok(amount)
+        Ok(available)
     }
 
     // ── Withdraw (#376: real token custody) ────────────────────────────────
     pub fn withdraw(env: Env, who: Address) -> Result<i128, Error> {
         who.require_auth();
 
-        let key = DataKey::Participant(who.clone());
-        let p: Participant = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .ok_or(Error::NotJoined)?;
+        let mut p = Self::load_participant(&env, &who)?;
 
         if env.ledger().sequence() < p.locked_until {
             return Err(Error::LockupActive);
@@ -675,13 +718,14 @@ impl DripPool {
         Self::acquire_lock(&mut pool)?;
         env.storage().instance().set(&DataKey::Pool, &pool);
 
-        // Return principal + any yield credited to this participant (#382)
-        let amount = p.deposited + p.yield_accrued;
-        env.storage().persistent().remove(&key);
+        // Withdraw only unwithdrawn principal, not rewards (#377)
+        let available = p.deposited - p.withdrawn_principal;
+        p.withdrawn_principal += available;
+        Self::save_participant(&env, &who, &p);
 
         // Transfer tokens from contract to caller (#376)
         let contract_addr = env.current_contract_address();
-        let transfer_result = Self::transfer_tokens(&env, &contract_addr, &who, &amount);
+        let transfer_result = Self::transfer_tokens(&env, &contract_addr, &who, &available);
 
         let mut pool: Pool = env
             .storage()
@@ -691,9 +735,10 @@ impl DripPool {
         Self::release_lock(&mut pool);
 
         if let Err(e) = transfer_result {
-            // Rollback: re-insert the participant with original state
-            env.storage().persistent().set(&key, &p);
-            Self::bump_participant(&env, &key);
+            // Rollback: revert withdrawn_principal
+            let mut p = Self::load_participant(&env, &who)?;
+            p.withdrawn_principal -= available;
+            Self::save_participant(&env, &who, &p);
             env.storage().instance().set(&DataKey::Pool, &pool);
             Self::bump_instance(&env);
             return Err(e);
@@ -704,9 +749,9 @@ impl DripPool {
 
         env.events().publish(
             (symbol_short!("pool"), symbol_short!("withdrawn")),
-            (who, amount),
+            (who, available),
         );
-        Ok(amount)
+        Ok(available)
     }
 
     // ── Yield management (#382) ────────────────────────────────────────────
@@ -753,15 +798,9 @@ impl DripPool {
         pool.distributable_yield -= amount;
         env.storage().instance().set(&DataKey::Pool, &pool);
 
-        let key = DataKey::Participant(who.clone());
-        let mut p: Participant = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .ok_or(Error::NotJoined)?;
+        let mut p = Self::load_participant(&env, &who)?;
         p.yield_accrued += amount;
-        env.storage().persistent().set(&key, &p);
-        Self::bump_participant(&env, &key);
+        Self::save_participant(&env, &who, &p);
         Self::bump_instance(&env);
         Ok(())
     }
@@ -770,11 +809,10 @@ impl DripPool {
 
     /// Extend TTL for a participant's persistent storage entry.
     pub fn renew_participant(env: Env, who: Address) -> Result<(), Error> {
-        let key = DataKey::Participant(who);
-        if !env.storage().persistent().has(&key) {
+        if !Self::has_participant(&env, &who) {
             return Err(Error::NotJoined);
         }
-        Self::bump_participant(&env, &key);
+        Self::bump_participant(&env, &DataKey::Participant(who));
         Self::bump_instance(&env);
         Ok(())
     }
@@ -804,6 +842,26 @@ impl DripPool {
 
         let winner = pool.admin.clone();
 
+        // Auto-join the winner if they aren't yet a participant
+        if !Self::has_participant(&env, &winner) {
+            let p = Participant {
+                joined_at: env.ledger().timestamp(),
+                deposited: 0,
+                locked_until: env.ledger().sequence() + LOCKUP_LEDGERS,
+                lockup_multiplier: 100,
+                yield_accrued: 0,
+                prize: 0,
+                claimed_reward: 0,
+                withdrawn_principal: 0,
+            };
+            Self::save_participant(&env, &winner, &p);
+        }
+
+        // Credit prize to the winner's prize balance (#377)
+        let mut p = Self::load_participant(&env, &winner)?;
+        p.prize += prize;
+        Self::save_participant(&env, &winner, &p);
+
         env.events().publish(
             (symbol_short!("pool"), symbol_short!("payout")),
             (winner.clone(), prize),
@@ -820,10 +878,7 @@ impl DripPool {
     }
 
     pub fn savings(env: Env, who: Address) -> Result<Participant, Error> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Participant(who))
-            .ok_or(Error::NotJoined)
+        Self::load_participant(&env, &who)
     }
 
     pub fn admins(env: Env) -> Vec<Address> {

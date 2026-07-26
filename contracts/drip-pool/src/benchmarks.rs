@@ -171,11 +171,9 @@ fn bench_claim_1_participant() {
     deposit_all(&env, &client, &participants, 1_000);
 
     let user = participants.get(0).unwrap();
+    // No yield/prize → claim returns 0 (#377)
     let claimed = client.claim(&user);
-    assert_eq!(claimed, 1_000);
-
-    let savings = client.savings(&user);
-    assert_eq!(savings.claimable, 0);
+    assert_eq!(claimed, 0);
 }
 
 #[test]
@@ -189,7 +187,7 @@ fn bench_claim_10_participants() {
     for i in 0..participants.len() {
         let user = participants.get(i).unwrap();
         let claimed = client.claim(&user);
-        assert_eq!(claimed, 1_000);
+        assert_eq!(claimed, 0);
     }
 }
 
@@ -204,7 +202,7 @@ fn bench_claim_100_participants() {
     for i in 0..participants.len() {
         let user = participants.get(i).unwrap();
         let claimed = client.claim(&user);
-        assert_eq!(claimed, 1_000);
+        assert_eq!(claimed, 0);
     }
 }
 
@@ -219,7 +217,7 @@ fn bench_claim_1000_participants() {
     for i in 0..participants.len() {
         let user = participants.get(i).unwrap();
         let claimed = client.claim(&user);
-        assert_eq!(claimed, 1_000);
+        assert_eq!(claimed, 0);
     }
 }
 
@@ -305,9 +303,11 @@ fn bench_full_round_1_participant() {
 
     for i in 0..participants.len() {
         let user = participants.get(i).unwrap();
+        // No yield/prize → claim returns 0 (#377)
         let claimed = client.claim(&user);
-        assert_eq!(claimed, 1_000);
+        assert_eq!(claimed, 0);
 
+        // Withdraw returns principal only (#377)
         let withdrawn = client.withdraw(&user);
         assert_eq!(withdrawn, 1_000);
     }
@@ -326,7 +326,7 @@ fn bench_full_round_10_participants() {
     for i in 0..participants.len() {
         let user = participants.get(i).unwrap();
         let claimed = client.claim(&user);
-        assert_eq!(claimed, 1_000);
+        assert_eq!(claimed, 0);
 
         let withdrawn = client.withdraw(&user);
         assert_eq!(withdrawn, 1_000);
@@ -346,7 +346,7 @@ fn bench_full_round_100_participants() {
     for i in 0..participants.len() {
         let user = participants.get(i).unwrap();
         let claimed = client.claim(&user);
-        assert_eq!(claimed, 1_000);
+        assert_eq!(claimed, 0);
 
         let withdrawn = client.withdraw(&user);
         assert_eq!(withdrawn, 1_000);
@@ -366,7 +366,7 @@ fn bench_full_round_1000_participants() {
     for i in 0..participants.len() {
         let user = participants.get(i).unwrap();
         let claimed = client.claim(&user);
-        assert_eq!(claimed, 1_000);
+        assert_eq!(claimed, 0);
 
         let withdrawn = client.withdraw(&user);
         assert_eq!(withdrawn, 1_000);

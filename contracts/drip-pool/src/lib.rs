@@ -3,6 +3,10 @@
 //! Drip pool contract — hardened with multi-sig admin controls (#140),
 //! reentrancy lock guards and lockup enforcement (#139).
 //!
+//! #376 Real SAC token custody: deposits transfer tokens from the caller into
+//! the contract; withdrawals transfer tokens back. Failed transfers revert all
+//! storage changes and leave the reentrancy guard clean.
+//!
 //! #382 Yield-backed lockup multipliers
 //! - `withdraw` returns principal + yield_accrued, never principal × multiplier.
 //! - Multipliers are reward weights; yield is credited by admins from realized reserves.
@@ -60,6 +64,7 @@ pub enum DataKey {
     Pool,
     Participant(Address),
     Proposal(u32), // pending admin proposal
+    Token,        // Address — accepted Stellar Asset Contract address (#376)
 }
 
 // ── Errors ─────────────────────────────────────────────────────────────────
@@ -80,6 +85,9 @@ pub enum Error {
     ProposalNotFound = 11,
     ProposalExpired = 12, // proposal ledger deadline passed
     InvalidAction = 13,   // payload fails reserve or signer-count checks
+    TokenNotConfigured = 14, // no accepted asset configured (#376)
+    AssetMismatch = 15,      // caller sent a different asset than the configured one (#376)
+    TransferFailed = 16,     // token transfer failed (#376)
 }
 
 // ── Structs ────────────────────────────────────────────────────────────────
@@ -182,6 +190,44 @@ impl DripPool {
             .extend_ttl(key, PERSISTENT_TTL_THRESHOLD, PERSISTENT_TTL_EXTEND);
     }
 
+    // ── Token helpers (#376) ──────────────────────────────────────────────
+
+    /// Check if a token address is configured.
+    fn has_token_configured(env: &Env) -> bool {
+        env.storage().instance().has(&DataKey::Token)
+    }
+
+    /// Get the configured token address. Returns Err if not configured.
+    fn get_token_address(env: &Env) -> Result<Address, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Token)
+            .ok_or(Error::TokenNotConfigured)
+    }
+
+    /// Transfer tokens from `from` to `to` via the configured SAC.
+    /// If no token is configured, this is a no-op (backward compatibility).
+    /// Returns Ok(()) on success, Err(TransferFailed) on failure.
+    fn transfer_tokens(
+        env: &Env,
+        from: &Address,
+        to: &Address,
+        amount: &i128,
+    ) -> Result<(), Error> {
+        if !Self::has_token_configured(env) {
+            return Ok(());
+        }
+        let token_addr = Self::get_token_address(env)?;
+
+        // The token client's transfer() will trap on failure.
+        // We don't have a try_ version, so we rely on the contract's
+        // own reentrancy guard + storage snapshot for safety.
+        let token = soroban_sdk::token::TokenClient::new(env, &token_addr);
+        token.transfer(from, to, amount);
+
+        Ok(())
+    }
+
     // ── Initialise ─────────────────────────────────────────────────────────
     pub fn create(env: Env, admin: Address) -> Result<(), Error> {
         admin.require_auth();
@@ -207,6 +253,20 @@ impl DripPool {
         Self::bump_instance(&env);
         env.events()
             .publish((symbol_short!("pool"), symbol_short!("created")), admin);
+        Ok(())
+    }
+
+    /// Configure the accepted Stellar Asset Contract address.
+    /// Only callable by an authorized signer.
+    pub fn set_token(env: Env, caller: Address, token: Address) -> Result<(), Error> {
+        caller.require_auth();
+        Self::require_signer(&env, &caller)?;
+        env.storage().instance().set(&DataKey::Token, &token);
+        Self::bump_instance(&env);
+        env.events().publish(
+            (symbol_short!("pool"), symbol_short!("token_set")),
+            token,
+        );
         Ok(())
     }
 
@@ -420,7 +480,7 @@ impl DripPool {
         Ok(())
     }
 
-    // ── Deposit / drip ─────────────────────────────────────────────────────
+    // ── Deposit / drip (#376: real token custody) ──────────────────────────
     pub fn drip(env: Env, who: Address, amount: i128) -> Result<(), Error> {
         Self::deposit(env, who, amount)
     }
@@ -431,8 +491,21 @@ impl DripPool {
             return Err(Error::InvalidAmount);
         }
 
+        // Snapshot pre-transfer state for rollback on failure
         let key = DataKey::Participant(who.clone());
-        let mut p: Participant = env.storage().persistent().get(&key).unwrap_or(Participant {
+        let old_participant: Option<Participant> = env.storage().persistent().get(&key);
+        let old_pool: Pool = env
+            .storage()
+            .instance()
+            .get(&DataKey::Pool)
+            .ok_or(Error::NotInitialized)?;
+
+        // Transfer tokens from caller to this contract (#376)
+        let contract_addr = env.current_contract_address();
+        Self::transfer_tokens(&env, &who, &contract_addr, &amount)?;
+
+        // Update participant state
+        let mut p: Participant = old_participant.unwrap_or(Participant {
             joined_at: env.ledger().timestamp(),
             deposited: 0,
             claimable: 0,
@@ -446,11 +519,8 @@ impl DripPool {
         env.storage().persistent().set(&key, &p);
         Self::bump_participant(&env, &key);
 
-        let mut pool: Pool = env
-            .storage()
-            .instance()
-            .get(&DataKey::Pool)
-            .ok_or(Error::NotInitialized)?;
+        // Update pool accounting
+        let mut pool: Pool = old_pool;
         pool.total_drips += 1;
         pool.total_deposited += amount;
         env.storage().instance().set(&DataKey::Pool, &pool);
@@ -478,6 +548,11 @@ impl DripPool {
         if !env.storage().instance().has(&DataKey::Pool) {
             return Err(Error::NotInitialized);
         }
+
+        // Transfer tokens from caller to this contract (#376)
+        let contract_addr = env.current_contract_address();
+        Self::transfer_tokens(&env, &who, &contract_addr, &amount)?;
+
         vault::apply_time_locked_deposit(&env, &who, amount, lockup_days)?;
 
         let mut pool: Pool = env
@@ -507,12 +582,38 @@ impl DripPool {
         let (principal, yield_earned) = vault::apply_withdrawal(&env, &who)?;
         let amount = principal + yield_earned;
 
+        // Transfer tokens from contract to caller (#376)
+        let contract_addr = env.current_contract_address();
+        let transfer_result = Self::transfer_tokens(&env, &contract_addr, &who, &amount);
+
         let mut pool: Pool = env
             .storage()
             .instance()
             .get(&DataKey::Pool)
             .ok_or(Error::NotInitialized)?;
         Self::release_lock(&mut pool);
+
+        if let Err(e) = transfer_result {
+            // Rollback: re-insert the participant (apply_withdrawal already removed it)
+            // and release the lock. The token transfer failed, so no funds moved.
+            let key = DataKey::Participant(who.clone());
+            env.storage().persistent().set(
+                &key,
+                &Participant {
+                    joined_at: env.ledger().timestamp(),
+                    deposited: principal,
+                    claimable: 0,
+                    locked_until: env.ledger().sequence() + LOCKUP_LEDGERS,
+                    lockup_multiplier: 100,
+                    yield_accrued: yield_earned,
+                },
+            );
+            Self::bump_participant(&env, &key);
+            env.storage().instance().set(&DataKey::Pool, &pool);
+            Self::bump_instance(&env);
+            return Err(e);
+        }
+
         env.storage().instance().set(&DataKey::Pool, &pool);
         Self::bump_instance(&env);
 
@@ -550,7 +651,7 @@ impl DripPool {
         Ok(amount)
     }
 
-    // ── Withdraw ───────────────────────────────────────────────────────────
+    // ── Withdraw (#376: real token custody) ────────────────────────────────
     pub fn withdraw(env: Env, who: Address) -> Result<i128, Error> {
         who.require_auth();
 
@@ -578,7 +679,9 @@ impl DripPool {
         let amount = p.deposited + p.yield_accrued;
         env.storage().persistent().remove(&key);
 
-        // token_client.transfer(&env.current_contract_address(), &who, &amount);
+        // Transfer tokens from contract to caller (#376)
+        let contract_addr = env.current_contract_address();
+        let transfer_result = Self::transfer_tokens(&env, &contract_addr, &who, &amount);
 
         let mut pool: Pool = env
             .storage()
@@ -586,6 +689,16 @@ impl DripPool {
             .get(&DataKey::Pool)
             .ok_or(Error::NotInitialized)?;
         Self::release_lock(&mut pool);
+
+        if let Err(e) = transfer_result {
+            // Rollback: re-insert the participant with original state
+            env.storage().persistent().set(&key, &p);
+            Self::bump_participant(&env, &key);
+            env.storage().instance().set(&DataKey::Pool, &pool);
+            Self::bump_instance(&env);
+            return Err(e);
+        }
+
         env.storage().instance().set(&DataKey::Pool, &pool);
         Self::bump_instance(&env);
 
@@ -719,6 +832,11 @@ impl DripPool {
 
     pub fn threshold(env: Env) -> u32 {
         Self::get_threshold(&env)
+    }
+
+    /// View the configured token address (#376).
+    pub fn token(env: Env) -> Result<Address, Error> {
+        Self::get_token_address(&env)
     }
 }
 

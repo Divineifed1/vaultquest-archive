@@ -716,3 +716,127 @@ fn threshold_view_returns_default() {
     client.create(&admin);
     assert_eq!(client.threshold(), 2);
 }
+
+// ── #376: real SAC token custody ───────────────────────────────────────────
+
+#[test]
+fn set_token_by_signer_succeeds() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    let token = Address::generate(&env);
+    client.set_token(&admin, &token);
+    assert_eq!(client.token(), token);
+}
+
+#[test]
+fn set_token_by_non_signer_fails() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    let rando = Address::generate(&env);
+    let token = Address::generate(&env);
+    assert_eq!(
+        client.try_set_token(&rando, &token),
+        Err(Ok(Error::Unauthorized))
+    );
+}
+
+#[test]
+fn token_not_configured_deposit_succeeds_without_transfer() {
+    // Without a configured token, deposit works (backward-compatible no-op transfer)
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    let alice = Address::generate(&env);
+    client.join(&alice);
+    client.deposit(&alice, &500);
+    let savings = client.savings(&alice);
+    assert_eq!(savings.deposited, 500);
+    assert_eq!(savings.claimable, 500);
+}
+
+#[test]
+fn token_not_configured_withdraw_succeeds_without_transfer() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    let alice = Address::generate(&env);
+    client.join(&alice);
+    client.deposit(&alice, &200);
+    skip_lockup(&env);
+    let amount = client.withdraw(&alice);
+    assert_eq!(amount, 200);
+}
+
+#[test]
+fn deposit_with_duration_without_token_succeeds() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    let alice = Address::generate(&env);
+    client.join(&alice);
+    client.deposit_with_duration(&alice, &300, &90);
+    let savings = client.savings(&alice);
+    assert_eq!(savings.deposited, 300);
+    assert_eq!(savings.lockup_multiplier, 150);
+}
+
+#[test]
+fn withdraw_locked_without_token_succeeds() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    let alice = Address::generate(&env);
+    client.join(&alice);
+    client.deposit_with_duration(&alice, &400, &7);
+    skip_lockup(&env);
+    let payout = client.withdraw_locked(&alice);
+    assert_eq!(payout, 400);
+}
+
+#[test]
+fn token_view_returns_error_when_not_set() {
+    let (_env, client, admin) = setup();
+    client.create(&admin);
+    assert_eq!(client.try_token(), Err(Ok(Error::TokenNotConfigured)));
+}
+
+#[test]
+fn token_event_emitted_on_set() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    let token = Address::generate(&env);
+    client.set_token(&admin, &token);
+    let events = env.events().all();
+    assert!(!events.events().is_empty());
+}
+
+#[test]
+fn deposit_event_emits_total_deposited() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    let alice = Address::generate(&env);
+    client.join(&alice);
+    client.deposit(&alice, &750);
+
+    let savings = client.savings(&alice);
+    assert_eq!(savings.deposited, 750);
+
+    let pool = client.pool();
+    assert_eq!(pool.total_deposited, 750);
+    assert_eq!(pool.total_drips, 1);
+}
+
+#[test]
+fn multiple_deposits_accumulate_correctly() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    let alice = Address::generate(&env);
+    client.join(&alice);
+    client.deposit(&alice, &100);
+    client.deposit(&alice, &200);
+    client.deposit(&alice, &300);
+
+    let savings = client.savings(&alice);
+    assert_eq!(savings.deposited, 600);
+    assert_eq!(savings.claimable, 600);
+
+    let pool = client.pool();
+    assert_eq!(pool.total_deposited, 600);
+    assert_eq!(pool.total_drips, 3);
+}

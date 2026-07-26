@@ -474,7 +474,10 @@ fn bench_propose_and_approve_2_of_2() {
     client.deposit(&admin, &10_000);
 
     let recipient = Address::generate(&env);
-    let pid = client.propose(&admin, &ProposalAction::ReleaseEscrow(recipient.clone(), 5_000));
+    let pid = client.propose(
+        &admin,
+        &ProposalAction::ReleaseEscrow(recipient.clone(), 5_000),
+    );
     let executed = client.approve(&signer2, &pid);
     assert!(executed);
 
@@ -502,7 +505,10 @@ fn bench_propose_and_approve_3_of_5() {
     client.deposit(&admin, &10_000);
 
     let recipient = Address::generate(&env);
-    let pid = client.propose(&admin, &ProposalAction::ReleaseEscrow(recipient.clone(), 5_000));
+    let pid = client.propose(
+        &admin,
+        &ProposalAction::ReleaseEscrow(recipient.clone(), 5_000),
+    );
     let _ = client.approve(&signer2, &pid);
     let executed = client.approve(&signer3, &pid);
     assert!(executed);
@@ -943,7 +949,10 @@ fn bench_proposal_with_5_admins() {
     client.deposit(&admin, &10_000);
 
     let recipient = Address::generate(&env);
-    let pid = client.propose(&admin, &ProposalAction::ReleaseEscrow(recipient.clone(), 5_000));
+    let pid = client.propose(
+        &admin,
+        &ProposalAction::ReleaseEscrow(recipient.clone(), 5_000),
+    );
     let _ = client.approve(&signer2, &pid);
     let _ = client.approve(&signer3, &pid);
     let executed = client.approve(&signer4, &pid);
@@ -1027,7 +1036,10 @@ fn bench_cancel_proposal() {
     client.seed_admin(&admin, &signer2);
 
     let recipient = Address::generate(&env);
-    let pid = client.propose(&admin, &ProposalAction::ReleaseEscrow(recipient.clone(), 1_000));
+    let pid = client.propose(
+        &admin,
+        &ProposalAction::ReleaseEscrow(recipient.clone(), 1_000),
+    );
 
     client.cancel_proposal(&admin, &pid);
 

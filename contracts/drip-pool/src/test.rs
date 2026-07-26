@@ -1,8 +1,8 @@
 //! Adversarial unit-test suite (#141) + regression tests (#139, #140).
 //! Event emission tests (#255). Storage optimisation regression (#257).
 
-use super::*;
 use super::proxy::{VaultProxy, VaultProxyClient};
+use super::*;
 use soroban_sdk::{
     testutils::{Address as _, Events as _, Ledger as _},
     Address, Env, IntoVal,
@@ -46,7 +46,10 @@ fn create_initialises_pool() {
 fn create_twice_fails() {
     let (_env, client, admin) = setup();
     client.create(&admin);
-    assert_eq!(client.try_create(&admin), Err(Ok(Error::AlreadyInitialized)));
+    assert_eq!(
+        client.try_create(&admin),
+        Err(Ok(Error::AlreadyInitialized))
+    );
 }
 
 #[test]
@@ -160,7 +163,10 @@ fn single_sig_does_not_execute_release() {
     client.deposit(&admin, &500);
 
     let recipient = Address::generate(&env);
-    let pid = client.propose(&admin, &ProposalAction::ReleaseEscrow(recipient.clone(), 500));
+    let pid = client.propose(
+        &admin,
+        &ProposalAction::ReleaseEscrow(recipient.clone(), 500),
+    );
     // Admin already signed via propose — second approve must be rejected.
     assert_eq!(
         client.try_approve(&admin, &pid),
@@ -270,10 +276,7 @@ fn flash_loan_blocked_by_lockup() {
     client.join(&attacker);
     client.deposit(&attacker, &1_000_000_000);
     // Attempt immediate withdrawal (flash-loan style) — must fail.
-    assert_eq!(
-        client.try_withdraw(&attacker),
-        Err(Ok(Error::LockupActive))
-    );
+    assert_eq!(client.try_withdraw(&attacker), Err(Ok(Error::LockupActive)));
     // Pool still holds the funds.
     assert_eq!(client.pool().total_deposited, 1_000_000_000);
 }
@@ -409,8 +412,8 @@ fn proxy_upgrade_changes_logic() {
     let logic2 = Address::generate(&env);
     client.create(&admin, &logic1);
     assert_eq!(client.logic_contract(), logic1);
-    // Upgrade to new logic
-    client.upgrade(&admin, &logic2);
+    // Upgrade to new logic (non-breaking: no migration record required)
+    client.upgrade(&admin, &logic2, &false);
     assert_eq!(client.logic_contract(), logic2);
 }
 
@@ -425,7 +428,7 @@ fn proxy_upgrade_unauthorized_fails() {
     let logic = Address::generate(&env);
     client.create(&admin, &logic);
     assert_eq!(
-        client.try_upgrade(&rando, &logic),
+        client.try_upgrade(&rando, &logic, &false),
         Err(Ok(ProxyError::Unauthorized))
     );
 }
@@ -507,8 +510,8 @@ fn mixed_lock_tiers_correct_principal() {
     let bob = Address::generate(&env);
     client.join(&alice);
     client.join(&bob);
-    client.deposit_with_duration(&alice, &400, &7);   // SHORT → 110 bps
-    client.deposit_with_duration(&bob, &600, &7);     // SHORT → 110 bps
+    client.deposit_with_duration(&alice, &400, &7); // SHORT → 110 bps
+    client.deposit_with_duration(&bob, &600, &7); // SHORT → 110 bps
     skip_lockup(&env);
 
     let alice_out = client.withdraw_locked(&alice);
@@ -525,7 +528,7 @@ fn flexible_deposit_no_lockup() {
     let alice = Address::generate(&env);
     client.join(&alice);
     client.deposit_with_duration(&alice, &100, &0); // flexible
-    // Can withdraw immediately (locked_until = current + 0)
+                                                    // Can withdraw immediately (locked_until = current + 0)
     let payout = client.withdraw_locked(&alice);
     assert_eq!(payout, 100);
 }
@@ -703,10 +706,7 @@ fn renew_instance_succeeds() {
 #[test]
 fn renew_instance_not_initialized_fails() {
     let (_env, client, _admin) = setup();
-    assert_eq!(
-        client.try_renew_instance(),
-        Err(Ok(Error::NotInitialized))
-    );
+    assert_eq!(client.try_renew_instance(), Err(Ok(Error::NotInitialized)));
 }
 
 /// threshold view returns the stored value.

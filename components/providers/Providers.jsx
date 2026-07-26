@@ -6,12 +6,14 @@ import { WagmiProvider } from "wagmi";
 import { RainbowKitProvider } from "@rainbow-me/rainbowkit";
 import "@rainbow-me/rainbowkit/styles.css";
 import { useEffect, useState } from "react";
-import { appWithTranslation } from "next-i18next";
+import { appWithTranslation, useTranslation } from "next-i18next";
 import { readStoredRpc, RPC_UPDATED_EVENT } from "@/lib/customRpc";
+import { getStoredLocale, setStoredLocale, normalizeLocale } from "@/lib/locale";
 import { createWagmiConfig } from "@/lib/wagmi";
 import { TransactionToastProvider } from "@/hooks/useTransactionToast";
 
 function ProvidersInner({ children }) {
+  const { i18n } = useTranslation("common");
   const [queryClient] = useState(
     () =>
       new QueryClient({
@@ -36,6 +38,19 @@ function ProvidersInner({ children }) {
     window.addEventListener(RPC_UPDATED_EVENT, onRpcUpdated);
     return () => window.removeEventListener(RPC_UPDATED_EVENT, onRpcUpdated);
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const storedLocale = getStoredLocale(window.localStorage);
+    const nextLocale = normalizeLocale(i18n.resolvedLanguage || i18n.language || storedLocale);
+
+    if (i18n.language !== nextLocale) {
+      void i18n.changeLanguage(nextLocale);
+    }
+
+    setStoredLocale(window.localStorage, nextLocale);
+    document.documentElement.lang = nextLocale;
+  }, [i18n]);
 
   return (
     <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={false} storageKey="vaultquest-theme">

@@ -72,14 +72,7 @@ export default function DepositModal({ isOpen, onClose }) {
       toast.success(
         <div className="flex flex-col gap-1">
           <span>Deposit of {amount} USDC confirmed!</span>
-          <a 
-            href={`https://etherscan.io/tx/0x7d3a95bfce31a20df949e29ae8f9`} 
-            target="_blank" 
-            rel="noreferrer" 
-            className="text-xs underline text-emerald-500 hover:text-emerald-400"
-          >
-            View transaction
-          </a>
+          <span className="text-xs text-vault-muted">Transaction hash: 0x7d3a95bfce31a20df949e29ae8f9</span>
         </div>,
         { duration: 5000 }
       );

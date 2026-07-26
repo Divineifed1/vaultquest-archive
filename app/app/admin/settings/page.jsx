@@ -228,7 +228,11 @@ export default function AdminSettingsPage() {
             <Shield className="h-4 w-4" aria-hidden="true" />
             View proposals
           </Link>
-          <Link href="/app/prizes" className="vq-btn-primary inline-flex items-center gap-2">
+          <Link href="/app/admin/pools/create" className="vq-btn-primary inline-flex items-center gap-2">
+            <Plus className="h-4 w-4" aria-hidden="true" />
+            Create pool
+          </Link>
+          <Link href="/app/prizes" className="vq-btn-ghost inline-flex items-center gap-2">
             <ArrowRight className="h-4 w-4" aria-hidden="true" />
             Review public rounds
           </Link>

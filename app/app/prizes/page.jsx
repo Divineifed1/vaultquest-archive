@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useAccount } from "wagmi";
+import { useTranslation } from "next-i18next";
 import PublicStatsBar from "@/components/app/PublicStatsBar";
 import RecentWinners from "@/components/app/RecentWinners";
 import TicketDistributionGrid from "@/components/app/TicketDistributionGrid";
@@ -26,17 +27,18 @@ const getCurrentRoundDates = () => {
 };
 
 export default function PrizesPage() {
+  const { t } = useTranslation("common");
   const { address } = useAccount();
   const mockTickets = generateMockTickets(1500);
   const { startDate, endDate } = getCurrentRoundDates();
 
   return (
     <div className="space-y-6">
-      <h1 className="text-3xl font-bold text-vault-text">Prizes</h1>
+      <h1 className="text-3xl font-bold text-vault-text">{t("routes.prizes.title")}</h1>
       <RoundCountdown
         startDate={startDate}
         endDate={endDate}
-        label="Current Round"
+        label={t("routes.prizes.currentRound")}
       />
       <TicketSimulator />
       <PublicStatsBar />
@@ -46,9 +48,9 @@ export default function PrizesPage() {
         userAddress={address}
         onTicketClick={(ticket) => console.log("Clicked ticket:", ticket)}
       />
-      <p className="text-vault-muted">Browse active prize rounds and past winners.</p>
+      <p className="text-vault-muted">{t("routes.prizes.subtitle")}</p>
       <Link href="/app" className="vq-btn-ghost inline-flex">
-        ← Back to dashboard
+        ← {t("routes.prizes.backToDashboard")}
       </Link>
     </div>
   );

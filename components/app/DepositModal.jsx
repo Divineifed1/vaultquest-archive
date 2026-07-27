@@ -7,6 +7,7 @@ import { toast } from "react-hot-toast";
 
 const MIN_DEPOSIT = 1;
 const MAX_DEPOSIT = 100_000;
+const QUICK_AMOUNTS = [25, 50, 75] as const;
 
 function formatToken(value, token) {
   return `${Number(value || 0).toFixed(token === "XLM" ? 6 : 4)} ${token}`;
@@ -30,6 +31,19 @@ export default function DepositModal({ isOpen, onClose }) {
   const isAboveMax = amountNum > MAX_DEPOSIT;
   const isInsufficientUsdc = amountNum > usdcBalance;
   const isInsufficientNative = gasBudget > 0 && walletBalance < gasBudget;
+
+  const handleQuickAmount = useCallback((pct) => {
+    const raw = usdcBalance * (pct / 100);
+    const clamped = Math.min(raw, MAX_DEPOSIT);
+    setAmount(clamped.toFixed(2));
+    setError(null);
+  }, [usdcBalance]);
+
+  const handleMaxAmount = useCallback(() => {
+    const max = Math.min(usdcBalance, MAX_DEPOSIT);
+    setAmount(max.toFixed(2));
+    setError(null);
+  }, [usdcBalance]);
 
   const refreshBalances = useCallback(async () => {
     setRefreshing(true);
@@ -188,6 +202,26 @@ export default function DepositModal({ isOpen, onClose }) {
                       {error}
                     </p>
                   )}
+
+                  <div className="mt-3 flex gap-2">
+                    {QUICK_AMOUNTS.map((pct) => (
+                      <button
+                        key={pct}
+                        type="button"
+                        onClick={() => handleQuickAmount(pct)}
+                        className="flex-1 rounded-xl border border-vault-border/60 px-3 py-2 text-sm font-medium text-vault-muted transition-colors hover:bg-vault-surface hover:text-vault-text focus:outline-none focus:ring-2 focus:ring-red-400/25"
+                      >
+                        {pct}%
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={handleMaxAmount}
+                      className="flex-1 rounded-xl border border-red-500/40 px-3 py-2 text-sm font-medium text-red-400 transition-colors hover:bg-red-500/10 hover:text-red-300 focus:outline-none focus:ring-2 focus:ring-red-400/25"
+                    >
+                      Max
+                    </button>
+                  </div>
 
                   {/* Balance impact preview */}
                   <div className="mt-3 rounded-2xl border border-vault-border/40 bg-vault-surface/50 p-4 space-y-2">

@@ -11,6 +11,18 @@ export const metricsRoutes = (
       return reply.send({ ok: true, data: summary });
     });
 
+    app.get("/api/metrics/aggregate", { preHandler: apiKeyGuard }, async (req, reply) => {
+      const metrics = await svc.getAggregateProtocolMetrics();
+      return reply.send({
+        ok: true,
+        data: metrics,
+        meta: {
+          generated_at: metrics.timestamp,
+          freshness: metrics.dataFreshness,
+        },
+      });
+    });
+
     app.get("/api/metrics/round", { preHandler: apiKeyGuard }, async (req, reply) => {
       const roundData = await svc.getCurrentRoundStatus();
       return reply.send({ ok: true, data: roundData });

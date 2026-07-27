@@ -70,7 +70,8 @@ export const actionsRoutes = (
 
     app.patch<{ Params: { id: string } }>("/actions/:id/submitted", async (req) => {
       const body = attachTxBody.parse(req.body);
-      const result = await svc.attachTxHash(req.params.id, body.tx_hash);
+      const workerId = (req.headers["x-worker-id"] as string | undefined) ?? "anonymous";
+      const result = await svc.attachTxHash(req.params.id, body.tx_hash, { workerId });
       return ok(serialize(result));
     });
 

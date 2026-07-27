@@ -10,10 +10,56 @@ import {
   SorobanRpcEventSource,
   defaultXdrDecoder
 } from "./services/stellarIndexer.js";
+import { setAttestationInfo } from "./routes/health.js";
 import type { ScheduledTask } from "node-cron";
+
+let loadManifest: typeof import("../../../lib/deployment-manifest.js").loadManifest | undefined;
+let validateManifestAgainstEnv: typeof import("../../../lib/deployment-manifest.js").validateManifestAgainstEnv | undefined;
+try {
+  const mod = await import("../../../lib/deployment-manifest.js");
+  loadManifest = mod.loadManifest;
+  validateManifestAgainstEnv = mod.validateManifestAgainstEnv;
+} catch {
+  // Manifest module not available — skip attestation (backward compatible)
+}
 
 const env = getEnv();
 const logger = createLogger(env.LOG_LEVEL);
+
+if (loadManifest && validateManifestAgainstEnv) {
+  try {
+    const manifest = loadManifest(env.DEPLOYMENT_MANIFEST_PATH);
+    const mismatches = validateManifestAgainstEnv(manifest);
+    if (mismatches.length > 0) {
+      logger.fatal({ mismatches }, "Deployment manifest mismatch — refusing to start");
+      process.exit(1);
+    }
+    setAttestationInfo({
+      manifestVersion: manifest.version,
+      environment: manifest.environment,
+      network: manifest.network.name,
+      buildSha: manifest.build.commitSha,
+      verified: true,
+    });
+    logger.info(
+      { version: manifest.version, environment: manifest.environment, network: manifest.network.name },
+      "deployment manifest verified"
+    );
+    if (env.NETWORK_PASSPHRASE && env.NETWORK_PASSPHRASE !== manifest.network.passphrase) {
+      logger.fatal(
+        { envPassphrase: env.NETWORK_PASSPHRASE, manifestPassphrase: manifest.network.passphrase },
+        "NETWORK_PASSPHRASE does not match deployment manifest — refusing to start"
+      );
+      process.exit(1);
+    }
+  } catch (err) {
+    logger.error({ err }, "Failed to load deployment manifest — attestation skipped");
+  }
+} else if (env.DEPLOYMENT_MANIFEST_PATH) {
+  logger.warn("DEPLOYMENT_MANIFEST_PATH set but manifest module unavailable — attestation skipped");
+} else {
+  logger.info("No deployment manifest configured — attestation skipped");
+}
 const prisma = getPrisma(env.DATABASE_URL);
 
 // Initialize Cache Service (pointing to REDIS_URL if set, otherwise defaults to local Redis)

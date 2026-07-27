@@ -171,11 +171,9 @@ fn bench_claim_1_participant() {
     deposit_all(&env, &client, &participants, 1_000);
 
     let user = participants.get(0).unwrap();
+    // No yield/prize → claim returns 0 (#377)
     let claimed = client.claim(&user);
-    assert_eq!(claimed, 1_000);
-
-    let savings = client.savings(&user);
-    assert_eq!(savings.claimable, 0);
+    assert_eq!(claimed, 0);
 }
 
 #[test]
@@ -189,7 +187,7 @@ fn bench_claim_10_participants() {
     for i in 0..participants.len() {
         let user = participants.get(i).unwrap();
         let claimed = client.claim(&user);
-        assert_eq!(claimed, 1_000);
+        assert_eq!(claimed, 0);
     }
 }
 
@@ -204,7 +202,7 @@ fn bench_claim_100_participants() {
     for i in 0..participants.len() {
         let user = participants.get(i).unwrap();
         let claimed = client.claim(&user);
-        assert_eq!(claimed, 1_000);
+        assert_eq!(claimed, 0);
     }
 }
 
@@ -219,7 +217,7 @@ fn bench_claim_1000_participants() {
     for i in 0..participants.len() {
         let user = participants.get(i).unwrap();
         let claimed = client.claim(&user);
-        assert_eq!(claimed, 1_000);
+        assert_eq!(claimed, 0);
     }
 }
 
@@ -305,9 +303,11 @@ fn bench_full_round_1_participant() {
 
     for i in 0..participants.len() {
         let user = participants.get(i).unwrap();
+        // No yield/prize → claim returns 0 (#377)
         let claimed = client.claim(&user);
-        assert_eq!(claimed, 1_000);
+        assert_eq!(claimed, 0);
 
+        // Withdraw returns principal only (#377)
         let withdrawn = client.withdraw(&user);
         assert_eq!(withdrawn, 1_000);
     }
@@ -326,7 +326,7 @@ fn bench_full_round_10_participants() {
     for i in 0..participants.len() {
         let user = participants.get(i).unwrap();
         let claimed = client.claim(&user);
-        assert_eq!(claimed, 1_000);
+        assert_eq!(claimed, 0);
 
         let withdrawn = client.withdraw(&user);
         assert_eq!(withdrawn, 1_000);
@@ -346,7 +346,7 @@ fn bench_full_round_100_participants() {
     for i in 0..participants.len() {
         let user = participants.get(i).unwrap();
         let claimed = client.claim(&user);
-        assert_eq!(claimed, 1_000);
+        assert_eq!(claimed, 0);
 
         let withdrawn = client.withdraw(&user);
         assert_eq!(withdrawn, 1_000);
@@ -366,7 +366,7 @@ fn bench_full_round_1000_participants() {
     for i in 0..participants.len() {
         let user = participants.get(i).unwrap();
         let claimed = client.claim(&user);
-        assert_eq!(claimed, 1_000);
+        assert_eq!(claimed, 0);
 
         let withdrawn = client.withdraw(&user);
         assert_eq!(withdrawn, 1_000);
@@ -474,7 +474,10 @@ fn bench_propose_and_approve_2_of_2() {
     client.deposit(&admin, &10_000);
 
     let recipient = Address::generate(&env);
-    let pid = client.propose(&admin, &ProposalAction::ReleaseEscrow(recipient.clone(), 5_000));
+    let pid = client.propose(
+        &admin,
+        &ProposalAction::ReleaseEscrow(recipient.clone(), 5_000),
+    );
     let executed = client.approve(&signer2, &pid);
     assert!(executed);
 
@@ -502,7 +505,10 @@ fn bench_propose_and_approve_3_of_5() {
     client.deposit(&admin, &10_000);
 
     let recipient = Address::generate(&env);
-    let pid = client.propose(&admin, &ProposalAction::ReleaseEscrow(recipient.clone(), 5_000));
+    let pid = client.propose(
+        &admin,
+        &ProposalAction::ReleaseEscrow(recipient.clone(), 5_000),
+    );
     let _ = client.approve(&signer2, &pid);
     let executed = client.approve(&signer3, &pid);
     assert!(executed);
@@ -943,7 +949,10 @@ fn bench_proposal_with_5_admins() {
     client.deposit(&admin, &10_000);
 
     let recipient = Address::generate(&env);
-    let pid = client.propose(&admin, &ProposalAction::ReleaseEscrow(recipient.clone(), 5_000));
+    let pid = client.propose(
+        &admin,
+        &ProposalAction::ReleaseEscrow(recipient.clone(), 5_000),
+    );
     let _ = client.approve(&signer2, &pid);
     let _ = client.approve(&signer3, &pid);
     let executed = client.approve(&signer4, &pid);
@@ -1027,7 +1036,10 @@ fn bench_cancel_proposal() {
     client.seed_admin(&admin, &signer2);
 
     let recipient = Address::generate(&env);
-    let pid = client.propose(&admin, &ProposalAction::ReleaseEscrow(recipient.clone(), 1_000));
+    let pid = client.propose(
+        &admin,
+        &ProposalAction::ReleaseEscrow(recipient.clone(), 1_000),
+    );
 
     client.cancel_proposal(&admin, &pid);
 

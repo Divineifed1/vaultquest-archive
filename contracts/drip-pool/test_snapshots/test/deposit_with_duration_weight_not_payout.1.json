@@ -103,10 +103,10 @@
                 "map": [
                   {
                     "key": {
-                      "symbol": "claimable"
+                      "symbol": "claimed_reward"
                     },
                     "val": {
-                      "i128": "1000"
+                      "i128": "0"
                     }
                   },
                   {
@@ -139,6 +139,22 @@
                     },
                     "val": {
                       "u32": 150
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "prize"
+                    },
+                    "val": {
+                      "i128": "0"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "withdrawn_principal"
+                    },
+                    "val": {
+                      "i128": "0"
                     }
                   },
                   {

@@ -20,6 +20,8 @@ import { createLogger } from "./logger.js";
 import { ok } from "./responses.js";
 import type { Logger } from "pino";
 import type { CacheService } from "./services/cacheService.js";
+import { walletAuthRoutes } from "./routes/walletAuth.js";
+import { WalletAuthService } from "./services/walletAuth.js";
 
 export type AppDeps = {
   prisma: PrismaClient;
@@ -95,6 +97,8 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   // Guard is a no-op when apiKey is undefined (local dev without configuration).
   const apiKeyGuard = requireApiKey(deps.apiKey);
 
+  const walletAuthSvc = new WalletAuthService(deps.prisma);
+
   app.get("/health", async () => ok({ ok: true }));
   app.get("/health/indexer", async () => {
     const health = await svc.getIndexerHealth();
@@ -102,6 +106,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   });
 
   app.register(actionsRoutes(svc, apiKeyGuard));
+  app.register(walletAuthRoutes(walletAuthSvc));
   app.register(healthRoutes(svc));
   app.register(savedPoolsRoutes(savedPoolsSvc));
   app.register(internalRoutes(svc, deps.internalSecret));

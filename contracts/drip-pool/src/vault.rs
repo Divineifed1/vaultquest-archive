@@ -45,47 +45,34 @@ pub(crate) fn apply_time_locked_deposit(
     amount: i128,
     lockup_days: u32,
 ) -> Result<(), Error> {
-    let key = DataKey::Participant(who.clone());
-    let mut p: Participant = env
-        .storage()
-        .persistent()
-        .get(&key)
-        .ok_or(Error::NotJoined)?;
-
+    let p: Participant = super::DripPool::load_participant(env, who)?;
+    let mut p = p;
     p.deposited += amount;
-    p.claimable += amount;
     p.lockup_multiplier = multiplier_for(lockup_days)?;
     let ledgers = lockup_ledgers_for(lockup_days)?;
     p.locked_until = env.ledger().sequence() + ledgers;
-    env.storage().persistent().set(&key, &p);
-    env.storage()
-        .persistent()
-        .extend_ttl(&key, 100_000, 500_000);
+    super::DripPool::save_participant(env, who, &p);
     Ok(())
 }
 
 /// Clear a participant's state after the lockup expires.
-/// Returns `(principal, yield_accrued)` — the caller sums them for the payout.
+/// Returns principal only — rewards must be claimed separately via claim_reward (#377).
 /// The lockup_multiplier is a reward weight and is NOT applied to principal (#382).
-pub(crate) fn apply_withdrawal(env: &Env, who: &Address) -> Result<(i128, i128), Error> {
-    let key = DataKey::Participant(who.clone());
-    let p: Participant = env
-        .storage()
-        .persistent()
-        .get(&key)
-        .ok_or(Error::NotJoined)?;
+pub(crate) fn apply_withdrawal(env: &Env, who: &Address) -> Result<i128, Error> {
+    let p = super::DripPool::load_participant(env, who)?;
 
     if env.ledger().sequence() < p.locked_until {
         return Err(Error::LockupActive);
     }
 
-    // Principal is always returned in full, independent of the reward weight.
-    // Yield is whatever was credited by the admin via credit_yield.
     let principal = p.deposited;
-    let yield_earned = p.yield_accrued;
-
-    env.storage().persistent().remove(&key);
-    Ok((principal, yield_earned))
+    env.storage()
+        .persistent()
+        .remove(&DataKey::Participant(who.clone()));
+    env.storage()
+        .persistent()
+        .remove(&DataKey::ParticipantV1(who.clone()));
+    Ok(principal)
 }
 
 /// Decrement pool accounting for an admin-initiated escrow release.

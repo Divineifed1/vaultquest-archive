@@ -203,3 +203,21 @@ model SavedPool {
   @@index([poolId])
   @@map("saved_pools")
 }
+
+model DrawProof {
+  id                String    @id @default(uuid()) @db.Uuid
+  drawId            String    @unique @map("draw_id")
+  roundId           Int       @map("round_id")
+  contractId        String    @map("contract_id")
+  proofJson         Json      @map("proof_json")
+  proofHash         String    @unique @map("proof_hash")
+  signature         String?
+  verified          Boolean   @default(false)
+  verifiedAt        DateTime? @map("verified_at")
+  verificationError String?   @map("verification_error")
+  createdAt         DateTime  @default(now()) @map("created_at")
+
+  @@index([roundId])
+  @@index([contractId, createdAt(sort: Desc)])
+  @@map("draw_proofs")
+}

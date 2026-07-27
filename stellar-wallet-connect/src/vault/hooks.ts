@@ -130,6 +130,7 @@ export function usePoolDiscovery(
         try {
           return await api.listPools({ signal: opts.signal });
         } catch (err) {
+          if (opts.signal?.aborted) throw err;
           if (!contractFallbackReads || !client.listPools) throw err;
         }
       }
@@ -163,6 +164,7 @@ export function usePrizeViews(
         try {
           return await api.listPrizeViews(options.walletAddress, { signal: opts.signal });
         } catch (err) {
+          if (opts.signal?.aborted) throw err;
           if (!contractFallbackReads) throw err;
         }
       }

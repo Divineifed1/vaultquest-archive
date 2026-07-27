@@ -99,10 +99,7 @@ function setConnection(publicKey: string, provider: string): void {
   connectionState.provider = appProvider;
 
   if (previousPublicKey && previousPublicKey !== publicKey) {
-    vaultQueryClient.clear();
-    if (typeof localStorage !== "undefined") {
-      localStorage.removeItem("vaultquest_pending_tx_state");
-    }
+    resetUserScopedState();
   }
 
   if (typeof localStorage !== "undefined") {
@@ -131,6 +128,8 @@ function disconnect(): void {
     localStorage.removeItem("walletProvider");
   }
 
+  resetUserScopedState();
+
   connectedPublicKey.set("");
   connectedNetwork.set(null);
   isNetworkMismatch.set(false);
@@ -139,6 +138,13 @@ function disconnect(): void {
 export async function checkAndNotifyFunding(): Promise<void> {
   // The product flow no longer opens the wallet funding modal automatically.
   return;
+}
+
+function resetUserScopedState(): void {
+  vaultQueryClient.clear();
+  if (typeof localStorage !== "undefined") {
+    localStorage.removeItem("vaultquest_pending_tx_state");
+  }
 }
 
 async function getWalletAvailability(provider: WalletType): Promise<{

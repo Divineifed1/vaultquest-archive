@@ -76,7 +76,11 @@ export class VaultQueryClient {
   }
 
   notify(key: readonly unknown[]): void {
-    this.getEntry(key).listeners.forEach((listener) => listener());
+    const id = serializeQueryKey(key);
+    const entry = this.entries.get(id);
+    if (entry) {
+      entry.listeners.forEach((listener) => listener());
+    }
   }
 
   isStale(key: readonly unknown[], staleTimeMs: number): boolean {

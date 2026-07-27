@@ -16,6 +16,8 @@ import type { PrismaClient } from "@prisma/client";
 import { AppError } from "../errors.js";
 import { ERROR_CODES } from "../constants.js";
 
+import { Keypair } from "@stellar/stellar-sdk";
+
 export interface ChallengeInput {
   walletAddress: string;
   publicKey: string;
@@ -34,6 +36,7 @@ export interface Challenge {
 
 export interface VerifyInput {
   challengeId: string;
+  payload: string;
   signature: string;
   publicKey: string;
   network: string;
@@ -105,9 +108,44 @@ export class WalletAuthService {
       throw AppError.unauthorized();
     }
 
-    // In a real implementation, verify the Stellar signature here.
-    // For now, we accept any non-empty signature in development.
-    if (!input.signature || input.signature.length === 0) {
+    if (!input.signature || input.signature.length === 0 || !input.payload) {
+      throw AppError.unauthorized();
+    }
+
+    let parsedPayload: any;
+    try {
+      parsedPayload = JSON.parse(input.payload);
+    } catch {
+      throw AppError.unauthorized();
+    }
+
+    // Verify every domain field server-side
+    if (
+      parsedPayload.appName !== "VaultQuest" ||
+      parsedPayload.network !== input.network ||
+      parsedPayload.purpose !== "API_AUTHENTICATION" ||
+      parsedPayload.nonce !== challenge.nonce
+    ) {
+      throw AppError.unauthorized();
+    }
+    
+    // Check payload expiry if provided
+    if (parsedPayload.expiresAt) {
+      const payloadExpiry = new Date(parsedPayload.expiresAt);
+      if (isNaN(payloadExpiry.getTime()) || payloadExpiry.getTime() <= Date.now()) {
+        throw AppError.unauthorized();
+      }
+    }
+
+    // Cryptographic verification
+    try {
+      const kp = Keypair.fromPublicKey(input.publicKey);
+      const dataBuffer = Buffer.from(input.payload);
+      const sigBuffer = Buffer.from(input.signature, "base64");
+      if (!kp.verify(dataBuffer, sigBuffer)) {
+        throw AppError.unauthorized();
+      }
+    } catch (err) {
       throw AppError.unauthorized();
     }
 

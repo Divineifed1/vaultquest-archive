@@ -947,7 +947,7 @@ fn claim_and_withdraw_total_limited() {
     // Total = deposited + rewards = 1500, which is >= total paid = 1500 ✓
     let pool = client.pool();
     assert_eq!(pool.total_deposited, 1_000 + 0); // alice deposited 1000, admin 0
-    // pool.total_deposited is not reduced by claims/prizes (they are not escrow releases)
+                                                 // pool.total_deposited is not reduced by claims/prizes (they are not escrow releases)
 }
 
 /// Double-spend protection: deposit cannot be claimed twice.

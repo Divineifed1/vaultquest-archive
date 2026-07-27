@@ -62,10 +62,10 @@ pub enum DataKey {
     Admins,    // Vec<Address> — approved signers
     Threshold, // u32 — current multisig threshold
     Pool,
-    Participant(Address),       // V2 participant storage (#377)
-    ParticipantV1(Address),     // legacy V1 participant storage (migration source)
-    Proposal(u32), // pending admin proposal
-    Token,        // Address — accepted Stellar Asset Contract address (#376)
+    Participant(Address),   // V2 participant storage (#377)
+    ParticipantV1(Address), // legacy V1 participant storage (migration source)
+    Proposal(u32),          // pending admin proposal
+    Token,                  // Address — accepted Stellar Asset Contract address (#376)
 }
 
 // ── Errors ─────────────────────────────────────────────────────────────────
@@ -84,8 +84,8 @@ pub enum Error {
     ThresholdNotMet = 9, // not enough signatures
     AlreadySigned = 10,  // signer already approved this proposal
     ProposalNotFound = 11,
-    ProposalExpired = 12, // proposal ledger deadline passed
-    InvalidAction = 13,   // payload fails reserve or signer-count checks
+    ProposalExpired = 12,    // proposal ledger deadline passed
+    InvalidAction = 13,      // payload fails reserve or signer-count checks
     TokenNotConfigured = 14, // no accepted asset configured (#376)
     AssetMismatch = 15,      // caller sent a different asset than the configured one (#376)
     TransferFailed = 16,     // token transfer failed (#376)
@@ -119,13 +119,13 @@ pub struct ParticipantV1 {
 #[contracttype]
 pub struct Participant {
     pub joined_at: u64,
-    pub deposited: i128,             // total principal deposited
+    pub deposited: i128, // total principal deposited
     pub locked_until: u32,
-    pub lockup_multiplier: u32,      // reward weight in bps — not a principal multiplier
-    pub yield_accrued: i128,         // realized yield credited by admin (#382)
-    pub prize: i128,                 // prize winnings from draw_winner (#377)
-    pub claimed_reward: i128,        // cumulative rewards already claimed (#377)
-    pub withdrawn_principal: i128,   // cumulative principal already withdrawn (#377)
+    pub lockup_multiplier: u32, // reward weight in bps — not a principal multiplier
+    pub yield_accrued: i128,    // realized yield credited by admin (#382)
+    pub prize: i128,            // prize winnings from draw_winner (#377)
+    pub claimed_reward: i128,   // cumulative rewards already claimed (#377)
+    pub withdrawn_principal: i128, // cumulative principal already withdrawn (#377)
 }
 
 /// A pending admin action that requires multi-sig approval.
@@ -214,7 +214,11 @@ impl DripPool {
             return Ok(p);
         }
         let v1_key = DataKey::ParticipantV1(who.clone());
-        if let Some(old) = env.storage().persistent().get::<DataKey, ParticipantV1>(&v1_key) {
+        if let Some(old) = env
+            .storage()
+            .persistent()
+            .get::<DataKey, ParticipantV1>(&v1_key)
+        {
             let new_p = Participant {
                 joined_at: old.joined_at,
                 deposited: old.deposited,
@@ -237,7 +241,9 @@ impl DripPool {
     fn save_participant(env: &Env, who: &Address, p: &Participant) {
         let key = DataKey::Participant(who.clone());
         env.storage().persistent().set(&key, p);
-        env.storage().persistent().remove(&DataKey::ParticipantV1(who.clone()));
+        env.storage()
+            .persistent()
+            .remove(&DataKey::ParticipantV1(who.clone()));
         Self::bump_participant(env, &key);
     }
 
@@ -247,7 +253,9 @@ impl DripPool {
         if env.storage().persistent().has(&key) {
             return true;
         }
-        env.storage().persistent().has(&DataKey::ParticipantV1(who.clone()))
+        env.storage()
+            .persistent()
+            .has(&DataKey::ParticipantV1(who.clone()))
     }
 
     // ── Token helpers (#376) ──────────────────────────────────────────────
@@ -323,10 +331,8 @@ impl DripPool {
         Self::require_signer(&env, &caller)?;
         env.storage().instance().set(&DataKey::Token, &token);
         Self::bump_instance(&env);
-        env.events().publish(
-            (symbol_short!("pool"), symbol_short!("token_set")),
-            token,
-        );
+        env.events()
+            .publish((symbol_short!("pool"), symbol_short!("token_set")), token);
         Ok(())
     }
 

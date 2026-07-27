@@ -11,6 +11,7 @@ import {
   normalizeStellarNetwork,
 } from "../lib/wallets.js";
 import { HorizonPool } from "./horizonPool.js";
+import { vaultQueryClient } from "../vault/data/queryClient.js";
 
 export interface WalletConnectionResult {
   address: string;
@@ -92,8 +93,17 @@ function setConnection(publicKey: string, provider: string): void {
     throw new Error(`Unsupported Stellar wallet provider: ${provider}`);
   }
 
+  const previousPublicKey = connectionState.publicKey;
+
   connectionState.publicKey = publicKey;
   connectionState.provider = appProvider;
+
+  if (previousPublicKey && previousPublicKey !== publicKey) {
+    vaultQueryClient.clear();
+    if (typeof localStorage !== "undefined") {
+      localStorage.removeItem("vaultquest_pending_tx_state");
+    }
+  }
 
   if (typeof localStorage !== "undefined") {
     localStorage.setItem("publicKey", publicKey);

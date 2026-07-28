@@ -121,6 +121,8 @@ function ConnectedDashboard({ isNetworkMismatch, onRetry, locale }) {
         />
       </div>
 
+      <SavedPoolsWatchlist />
+
       <PrizeChart />
 
       <UserDepositsList

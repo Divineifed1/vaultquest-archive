@@ -4,8 +4,10 @@ import correlation from "./middleware/correlation.js";
 import prometheusPlugin from "./middleware/prometheusPlugin.js";
 import { LedgerService } from "./services/ledger.js";
 import { SavedPoolsService } from "./services/savedPools.js";
+import { SchemaVersionService } from "./services/schemaVersionService.js";
 import { actionsRoutes } from "./routes/actions.js";
 import { savedPoolsRoutes } from "./routes/savedPools.js";
+import { schemaVersionRoutes } from "./routes/schemaVersion.js";
 import { internalRoutes } from "./routes/internal.js";
 import { metricsRoutes } from "./routes/metrics.js";
 import { prometheusRoutes } from "./routes/prometheus.js";
@@ -85,6 +87,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   const savedPoolsSvc = new SavedPoolsService(deps.prisma);
   const metricsSvc = new MetricsService(deps.prisma);
   const drawProofSvc = new DrawProofService(deps.prisma, null, deps.logger);
+  const schemaVersionSvc = new SchemaVersionService(deps.prisma);
 
   svc.onActionConfirmed((actionId, actionType) => {
     if (actionType === "select_winner") {
@@ -110,6 +113,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   app.register(walletAuthRoutes(walletAuthSvc));
   app.register(healthRoutes(svc));
   app.register(savedPoolsRoutes(savedPoolsSvc));
+  app.register(schemaVersionRoutes(schemaVersionSvc));
   app.register(internalRoutes(svc, deps.internalSecret));
   app.register(metricsRoutes(metricsSvc, apiKeyGuard));
   app.register(prometheusRoutes);

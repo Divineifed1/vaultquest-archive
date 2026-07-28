@@ -25,6 +25,7 @@ import type { CacheService } from "./services/cacheService.js";
 import { walletAuthRoutes } from "./routes/walletAuth.js";
 import { WalletAuthService } from "./services/walletAuth.js";
 import { transactionMetricsRoutes } from "./routes/transactionMetrics.js";
+import { EmailService } from "./services/emailService.js";
 
 export type AppDeps = {
   prisma: PrismaClient;
@@ -33,6 +34,7 @@ export type AppDeps = {
   apiKey?: string;
   logger?: Logger;
   cacheService?: CacheService;
+  emailService?: EmailService;
 };
 
 export function buildApp(deps: AppDeps): FastifyInstance {

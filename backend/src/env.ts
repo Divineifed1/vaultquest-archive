@@ -44,7 +44,9 @@ const schema = z.object({
    */
   BACKUP_DIR: z.string().min(1).optional(),
   BACKUP_RETAIN_DAYS: z.coerce.number().int().positive().default(7),
-  BACKUP_SCHEDULE: z.string().default("0 2 * * *")
+  BACKUP_SCHEDULE: z.string().default("0 2 * * *"),
+  SENDGRID_API_KEY: z.string().min(1).optional(),
+  EMAIL_FROM: z.string().email().optional()
 });
 
 export type Env = z.infer<typeof schema>;
@@ -78,7 +80,9 @@ export function getEnv(): Env {
       API_KEY: process.env.API_KEY || undefined,
       BACKUP_DIR: process.env.BACKUP_DIR || undefined,
       BACKUP_RETAIN_DAYS: Number(process.env.BACKUP_RETAIN_DAYS ?? 7),
-      BACKUP_SCHEDULE: process.env.BACKUP_SCHEDULE ?? "0 2 * * *"
+      BACKUP_SCHEDULE: process.env.BACKUP_SCHEDULE ?? "0 2 * * *",
+      SENDGRID_API_KEY: process.env.SENDGRID_API_KEY || undefined,
+      EMAIL_FROM: process.env.EMAIL_FROM || undefined
     } satisfies Env;
   }
   return parseEnv();

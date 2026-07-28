@@ -1057,6 +1057,282 @@ fn invariant_total_claimed_never_exceeds_rewards() {
     assert_eq!(client.savings(&bob).withdrawn_principal, 500);
 }
 
+// ── #440: claim deadline and unclaimed reward sweep ────────────────────────
+
+/// set_claim_deadline stores the deadline and is readable via the view.
+#[test]
+fn set_claim_deadline_by_signer_succeeds() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    env.ledger().set_timestamp(1_000);
+    client.set_claim_deadline(&admin, &1_500);
+    assert_eq!(client.claim_deadline(), Some(1_500));
+    assert!(!client.claim_deadline_passed());
+}
+
+/// set_claim_deadline emits an event.
+#[test]
+fn set_claim_deadline_emits_event() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    env.ledger().set_timestamp(1_000);
+    client.set_claim_deadline(&admin, &1_500);
+    let events = env.events().all();
+    assert!(!events.events().is_empty(), "no events emitted");
+}
+
+/// set_claim_deadline rejects a deadline that is not strictly in the future.
+#[test]
+fn set_claim_deadline_in_past_fails() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    env.ledger().set_timestamp(1_000);
+    assert_eq!(
+        client.try_set_claim_deadline(&admin, &1_000),
+        Err(Ok(Error::InvalidDeadline))
+    );
+    assert_eq!(
+        client.try_set_claim_deadline(&admin, &999),
+        Err(Ok(Error::InvalidDeadline))
+    );
+}
+
+/// Only an approved signer may set the claim deadline.
+#[test]
+fn set_claim_deadline_by_non_signer_fails() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    let rando = Address::generate(&env);
+    env.ledger().set_timestamp(1_000);
+    assert_eq!(
+        client.try_set_claim_deadline(&rando, &1_500),
+        Err(Ok(Error::Unauthorized))
+    );
+}
+
+/// Without a configured deadline, claims are always allowed.
+#[test]
+fn claim_without_deadline_never_blocked() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    let alice = Address::generate(&env);
+    client.join(&alice);
+    client.deposit(&alice, &1_000);
+    client.add_yield(&admin, &100);
+    client.credit_yield(&admin, &alice, &100);
+
+    env.ledger().set_timestamp(10_000_000);
+    assert_eq!(client.claim_reward(&alice), 100);
+}
+
+/// Boundary: the deadline instant itself is still claimable.
+#[test]
+fn claim_exactly_at_deadline_succeeds() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    let alice = Address::generate(&env);
+    client.join(&alice);
+    client.deposit(&alice, &1_000);
+    client.add_yield(&admin, &100);
+    client.credit_yield(&admin, &alice, &100);
+
+    env.ledger().set_timestamp(1_000);
+    client.set_claim_deadline(&admin, &2_000);
+
+    env.ledger().set_timestamp(2_000);
+    assert_eq!(client.claim_reward(&alice), 100);
+}
+
+/// Boundary: one second before the deadline is claimable.
+#[test]
+fn claim_one_second_before_deadline_succeeds() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    let alice = Address::generate(&env);
+    client.join(&alice);
+    client.deposit(&alice, &1_000);
+    client.add_yield(&admin, &100);
+    client.credit_yield(&admin, &alice, &100);
+
+    env.ledger().set_timestamp(1_000);
+    client.set_claim_deadline(&admin, &2_000);
+
+    env.ledger().set_timestamp(1_999);
+    assert_eq!(client.claim_reward(&alice), 100);
+}
+
+/// Boundary: one second after the deadline reverts.
+#[test]
+fn claim_one_second_after_deadline_reverts() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    let alice = Address::generate(&env);
+    client.join(&alice);
+    client.deposit(&alice, &1_000);
+    client.add_yield(&admin, &100);
+    client.credit_yield(&admin, &alice, &100);
+
+    env.ledger().set_timestamp(1_000);
+    client.set_claim_deadline(&admin, &2_000);
+
+    env.ledger().set_timestamp(2_001);
+    assert_eq!(
+        client.try_claim_reward(&alice),
+        Err(Ok(Error::ClaimDeadlinePassed))
+    );
+    // Reward remains unclaimed — deadline enforcement does not lose it.
+    assert_eq!(client.savings(&alice).claimed_reward, 0);
+}
+
+/// claim() (the alias) is also blocked once the deadline has passed.
+#[test]
+fn claim_alias_blocked_after_deadline() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    let alice = Address::generate(&env);
+    client.join(&alice);
+    client.deposit(&alice, &500);
+
+    env.ledger().set_timestamp(1_000);
+    client.set_claim_deadline(&admin, &2_000);
+    env.ledger().set_timestamp(2_001);
+
+    assert_eq!(
+        client.try_claim(&alice),
+        Err(Ok(Error::ClaimDeadlinePassed))
+    );
+}
+
+/// sweep_unclaimed cannot run before a deadline is configured.
+#[test]
+fn sweep_without_deadline_fails() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    let alice = Address::generate(&env);
+    client.join(&alice);
+    assert_eq!(
+        client.try_sweep_unclaimed(&admin, &alice),
+        Err(Ok(Error::NoClaimDeadline))
+    );
+}
+
+/// sweep_unclaimed cannot run before the deadline has passed (not even
+/// exactly at the deadline — the deadline instant still belongs to claim).
+#[test]
+fn sweep_before_deadline_fails() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    let alice = Address::generate(&env);
+    client.join(&alice);
+
+    env.ledger().set_timestamp(1_000);
+    client.set_claim_deadline(&admin, &2_000);
+
+    env.ledger().set_timestamp(2_000);
+    assert_eq!(
+        client.try_sweep_unclaimed(&admin, &alice),
+        Err(Ok(Error::ClaimDeadlineNotReached))
+    );
+}
+
+/// After the deadline passes, unclaimed reward is swept to the pool admin
+/// (treasury), the participant's reward is marked claimed, and the pool
+/// records that a sweep has occurred.
+#[test]
+fn sweep_after_deadline_moves_reward_to_admin() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    let alice = Address::generate(&env);
+    client.join(&alice);
+    client.deposit(&alice, &1_000);
+    client.add_yield(&admin, &300);
+    client.credit_yield(&admin, &alice, &300);
+
+    env.ledger().set_timestamp(1_000);
+    client.set_claim_deadline(&admin, &2_000);
+    env.ledger().set_timestamp(2_001);
+
+    assert!(!client.unclaimed_swept());
+    let swept = client.sweep_unclaimed(&admin, &alice);
+    assert_eq!(swept, 300);
+    assert!(client.unclaimed_swept());
+    assert!(client.claim_deadline_passed());
+
+    // Participant's reward is now marked claimed; nothing left to claim or
+    // sweep again.
+    assert_eq!(client.savings(&alice).claimed_reward, 300);
+    assert_eq!(
+        client.try_claim_reward(&alice),
+        Err(Ok(Error::ClaimDeadlinePassed))
+    );
+    assert_eq!(client.sweep_unclaimed(&admin, &alice), 0);
+
+    // Principal is untouched by the sweep.
+    assert_eq!(client.savings(&alice).deposited, 1_000);
+}
+
+/// sweep_unclaimed emits an event.
+#[test]
+fn sweep_emits_event() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    let alice = Address::generate(&env);
+    client.join(&alice);
+    client.deposit(&alice, &1_000);
+    client.add_yield(&admin, &100);
+    client.credit_yield(&admin, &alice, &100);
+
+    env.ledger().set_timestamp(1_000);
+    client.set_claim_deadline(&admin, &2_000);
+    env.ledger().set_timestamp(2_001);
+
+    client.sweep_unclaimed(&admin, &alice);
+    let events = env.events().all();
+    assert!(!events.events().is_empty(), "no events emitted");
+}
+
+/// Only an approved signer may sweep unclaimed rewards.
+#[test]
+fn sweep_by_non_signer_fails() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    let alice = Address::generate(&env);
+    client.join(&alice);
+
+    env.ledger().set_timestamp(1_000);
+    client.set_claim_deadline(&admin, &2_000);
+    env.ledger().set_timestamp(2_001);
+
+    let rando = Address::generate(&env);
+    assert_eq!(
+        client.try_sweep_unclaimed(&rando, &alice),
+        Err(Ok(Error::Unauthorized))
+    );
+}
+
+/// A participant who claims before the deadline has nothing left to sweep.
+#[test]
+fn claimed_reward_leaves_nothing_to_sweep() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    let alice = Address::generate(&env);
+    client.join(&alice);
+    client.deposit(&alice, &1_000);
+    client.add_yield(&admin, &100);
+    client.credit_yield(&admin, &alice, &100);
+
+    env.ledger().set_timestamp(1_000);
+    client.set_claim_deadline(&admin, &2_000);
+
+    // Alice claims before the deadline.
+    assert_eq!(client.claim_reward(&alice), 100);
+
+    env.ledger().set_timestamp(2_001);
+    assert_eq!(client.sweep_unclaimed(&admin, &alice), 0);
+    // Nothing was actually moved, so the pool-level sweep flag stays unset.
+    assert!(!client.unclaimed_swept());
+}
+
 /// Participant struct has the correct V2 fields via savings view.
 #[test]
 fn participant_v2_fields_present() {
@@ -1071,4 +1347,123 @@ fn participant_v2_fields_present() {
     let _ = savings.withdrawn_principal;
     // V1 field that should NOT be present
     // The following would fail to compile: savings.claimable
+}
+
+// ── #512: Loss Circuit Breaker & Emergency Exit ────────────────────────────
+
+/// draw_winner and deposit are blocked while in emergency mode.
+#[test]
+fn draw_winner_blocked_in_emergency() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    let signer2 = Address::generate(&env);
+    client.seed_admin(&admin, &signer2); // 2 signers for threshold
+
+    // Trigger emergency mode with 500 available assets
+    let pid = client.propose(&admin, &ProposalAction::TriggerEmergency(500));
+    client.approve(&signer2, &pid);
+
+    assert!(client.is_emergency());
+    assert_eq!(client.emergency_assets(), 500);
+
+    // draw_winner fails with InEmergency
+    assert_eq!(
+        client.try_draw_winner(&admin, &100),
+        Err(Ok(Error::InEmergency))
+    );
+
+    // join and deposit fail with InEmergency
+    let alice = Address::generate(&env);
+    assert_eq!(client.try_join(&alice), Err(Ok(Error::InEmergency)));
+}
+
+/// Emergency withdraw distributes available assets pro-rata on partial loss.
+#[test]
+fn emergency_withdraw_pro_rata_partial_loss() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    let signer2 = Address::generate(&env);
+    client.seed_admin(&admin, &signer2);
+
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    client.join(&alice);
+    client.join(&bob);
+
+    client.deposit(&alice, &600);
+    client.deposit(&bob, &400);
+    assert_eq!(client.pool().total_deposited, 1_000);
+
+    // Trigger emergency with 500 assets (50% loss)
+    let pid = client.propose(&admin, &ProposalAction::TriggerEmergency(500));
+    client.approve(&signer2, &pid);
+
+    assert!(client.is_emergency());
+
+    // Alice has 600/1000 = 60%, gets 600 * 500 / 1000 = 300
+    let alice_payout = client.emergency_withdraw(&alice);
+    assert_eq!(alice_payout, 300);
+
+    // Bob has 400 remaining out of 400 total_deposited, 200 emergency_assets, gets 200
+    let bob_payout = client.emergency_withdraw(&bob);
+    assert_eq!(bob_payout, 200);
+
+    assert_eq!(client.pool().total_deposited, 0);
+    assert_eq!(client.emergency_assets(), 0);
+}
+
+/// Emergency withdraw returns 0 on total strategy failure (0 emergency assets).
+#[test]
+fn emergency_withdraw_total_strategy_failure() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    let signer2 = Address::generate(&env);
+    client.seed_admin(&admin, &signer2);
+
+    let alice = Address::generate(&env);
+    client.join(&alice);
+    client.deposit(&alice, &1_000);
+
+    // Trigger emergency with 0 assets
+    let pid = client.propose(&admin, &ProposalAction::TriggerEmergency(0));
+    client.approve(&signer2, &pid);
+
+    let payout = client.emergency_withdraw(&alice);
+    assert_eq!(payout, 0);
+    assert_eq!(client.pool().total_deposited, 0);
+}
+
+/// Recapitalization and return to normal mode via governance.
+#[test]
+fn recapitalization_and_resume_normal() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    let signer2 = Address::generate(&env);
+    client.seed_admin(&admin, &signer2);
+
+    let alice = Address::generate(&env);
+    client.join(&alice);
+    client.deposit(&alice, &1_000);
+
+    // Trigger emergency with 400 assets
+    let pid1 = client.propose(&admin, &ProposalAction::TriggerEmergency(400));
+    client.approve(&signer2, &pid1);
+
+    // Try ResumeNormal before recapitalization -> fails with Insolvent at propose time
+    assert_eq!(
+        client.try_propose(&admin, &ProposalAction::ResumeNormal),
+        Err(Ok(Error::Insolvent))
+    );
+
+    // Recapitalize by 600
+    let pid2 = client.propose(&admin, &ProposalAction::Recapitalize(600));
+    client.approve(&signer2, &pid2);
+
+    assert_eq!(client.emergency_assets(), 1_000);
+
+    // Resume normal mode
+    let pid3 = client.propose(&admin, &ProposalAction::ResumeNormal);
+    client.approve(&signer2, &pid3);
+
+    assert!(!client.is_emergency());
 }

@@ -29,6 +29,7 @@ import { CategoryService } from "./services/categoryService.js";
 import { categoriesRoutes } from "./routes/categories.js";
 import { NotificationService } from "./services/notificationService.js";
 import { notificationsRoutes } from "./routes/notifications.js";
+import { EmailService } from "./services/emailService.js";
 
 export type AppDeps = {
   prisma: PrismaClient;
@@ -41,6 +42,7 @@ export type AppDeps = {
   categoriesCacheTtlSeconds?: number;
   /** Reminder lead time (hours) for notification generation (issue #446). */
   reminderLeadHours?: number;
+  emailService?: EmailService;
 };
 
 export function buildApp(deps: AppDeps): FastifyInstance {

@@ -60,7 +60,9 @@ const schema = z.object({
    * (issue #446). A reminder is generated once a saved pool's `locksAt` or
    * `drawsAt` timestamp falls within this many hours of "now".
    */
-  REMINDER_LEAD_HOURS: z.coerce.number().int().positive().default(24)
+  REMINDER_LEAD_HOURS: z.coerce.number().int().positive().default(24),
+  SENDGRID_API_KEY: z.string().min(1).optional(),
+  EMAIL_FROM: z.string().email().optional()
 });
 
 export type Env = z.infer<typeof schema>;
@@ -97,7 +99,9 @@ export function getEnv(): Env {
       BACKUP_SCHEDULE: process.env.BACKUP_SCHEDULE ?? "0 2 * * *",
       REDIS_URL: process.env.REDIS_URL || undefined,
       CATEGORIES_CACHE_TTL_SECONDS: Number(process.env.CATEGORIES_CACHE_TTL_SECONDS ?? 3600),
-      REMINDER_LEAD_HOURS: Number(process.env.REMINDER_LEAD_HOURS ?? 24)
+      REMINDER_LEAD_HOURS: Number(process.env.REMINDER_LEAD_HOURS ?? 24),
+      SENDGRID_API_KEY: process.env.SENDGRID_API_KEY || undefined,
+      EMAIL_FROM: process.env.EMAIL_FROM || undefined
     } satisfies Env;
   }
   return parseEnv();

@@ -4,9 +4,9 @@ import { Bookmark, Coins, Trophy, Users } from "lucide-react";
 import {
   ErrorState,
   LoadingState,
-  StaleIndicator,
   WalletDisconnectedState,
 } from "../../components/FallbackStates";
+import { DataRefreshControl } from "../../components/DataRefreshControl";
 import type { PoolActionType, PoolStatus, PoolSummary, UserPosition } from "../contract/types";
 import { formatAmount, formatDate, truncateAddress } from "../lib/format";
 import { OnboardingChecklist } from "./OnboardingChecklist";
@@ -41,6 +41,10 @@ export interface PoolDetailProps {
   showOnboarding?: boolean;
   /** When provided, renders an inline transaction timeline below the action buttons. */
   txFlow?: TxFlowResult;
+  updatedAt?: number | null;
+  fetching?: boolean;
+  partialError?: Error | null;
+  refetch?: () => void;
 }
 
 const Stat: FC<{ icon: ReactNode; label: string; value: string }> = ({ icon, label, value }) => (
@@ -92,6 +96,10 @@ export const PoolDetail: FC<PoolDetailProps> = ({
   savingSavedState = false,
   showOnboarding = true,
   txFlow,
+  updatedAt = null,
+  fetching = false,
+  partialError = null,
+  refetch = () => {},
 }) => {
   const mismatch = useStore(isNetworkMismatch);
 
@@ -130,7 +138,13 @@ export const PoolDetail: FC<PoolDetailProps> = ({
               {savingSavedState ? "Saving…" : saved ? "Unsave pool" : "Save pool"}
             </button>
           )}
-          {stale && <StaleIndicator />}
+          <DataRefreshControl
+            updatedAt={updatedAt}
+            stale={stale}
+            fetching={fetching}
+            partialError={partialError}
+            onRefresh={refetch}
+          />
         </div>
       </header>
 

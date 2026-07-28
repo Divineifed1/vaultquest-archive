@@ -4,9 +4,9 @@ import {
   EmptyState,
   ErrorState,
   LoadingState,
-  StaleIndicator,
   WalletDisconnectedState,
 } from "../../components/FallbackStates";
+import { DataRefreshControl } from "../../components/DataRefreshControl";
 import type { RewardHistoryEntry, RewardOutcome } from "../contract/types";
 import { explorerTxUrl, formatAmount, formatDate, truncateAddress, type StellarNetwork } from "../lib/format";
 import { TransactionTimeline } from "../../components/TransactionTimeline";
@@ -33,6 +33,10 @@ export interface RewardHistoryProps {
   /** When provided, renders an inline claim transaction timeline and wires claim buttons. */
   claimFlow?: TxFlowResult;
   onClaim?: (entry: RewardHistoryEntry) => void;
+  updatedAt?: number | null;
+  fetching?: boolean;
+  partialError?: Error | null;
+  refetch?: () => void;
 }
 
 const OUTCOME_BADGE: Record<RewardOutcome, { label: string; className: string }> = {
@@ -80,6 +84,10 @@ export const RewardHistory: FC<RewardHistoryProps> = ({
   onConnect,
   claimFlow,
   onClaim,
+  updatedAt = null,
+  fetching = false,
+  partialError = null,
+  refetch = () => {},
 }) => {
   if (!walletConnected) {
     return <WalletDisconnectedState onConnect={onConnect} />;
@@ -107,7 +115,13 @@ export const RewardHistory: FC<RewardHistoryProps> = ({
           <Trophy className="h-5 w-5 text-red-400" aria-hidden="true" />
           Reward history
         </h2>
-        {stale && <StaleIndicator />}
+        <DataRefreshControl
+          updatedAt={updatedAt}
+          stale={stale}
+          fetching={fetching}
+          partialError={partialError}
+          onRefresh={refetch}
+        />
       </header>
 
       {/* Desktop: table */}

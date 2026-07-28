@@ -46,7 +46,7 @@ export interface IndexResult {
 }
 
 export interface HorizonEventSource {
-  fetchEvents(opts: { cursor: string | null; limit: number }): Promise<RawHorizonEvent[]>;
+  fetchEvents(opts: { cursor?: string | null; startLedger?: number; endLedger?: number; limit?: number }): Promise<RawHorizonEvent[]>;
 }
 
 export interface XdrDecoder {
@@ -226,7 +226,7 @@ export class StellarIndexer {
 export class SorobanRpcEventSource implements HorizonEventSource {
   constructor(private options: SorobanRpcEventSourceOptions) {}
 
-  async fetchEvents(opts: { cursor: string | null; limit: number }): Promise<RawHorizonEvent[]> {
+  async fetchEvents(opts: { cursor?: string | null; startLedger?: number; endLedger?: number; limit?: number }): Promise<RawHorizonEvent[]> {
     // TODO: replace with real Soroban RPC call via @stellar/stellar-sdk
     // e.g. await server.getEvents({ startLedger, filters, limit })
     return [];

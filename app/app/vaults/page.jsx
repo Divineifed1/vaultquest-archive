@@ -19,7 +19,7 @@ import VaultRetryQueue from "@/components/app/VaultRetryQueue";
 import PoolComparisonDrawer from "@/components/app/PoolComparisonDrawer";
 import { useVaultDataReview } from "@/hooks/useVaultDataReview";
 import { usePoolComparison } from "@/components/hooks/usePoolComparison";
-import { Archive, LayoutGrid, Table, GitCompare } from "lucide-react";
+import { Archive, LayoutGrid, Table, GitCompare, CalendarDays } from "lucide-react";
 
 const INITIAL_FILTERS = {
   search: "",
@@ -157,10 +157,16 @@ export default function VaultsPage() {
               .
             </p>
           </div>
-          <Link href="/app/vaults/archive" className="vq-btn-ghost self-start">
-            <Archive className="h-4 w-4" aria-hidden="true" />
-            {t("routes.vaults.roundArchive")}
-          </Link>
+          <div className="flex gap-2 self-start">
+            <Link href="/app/vaults/calendar" className="vq-btn-ghost">
+              <CalendarDays className="h-4 w-4" aria-hidden="true" />
+              Calendar
+            </Link>
+            <Link href="/app/vaults/archive" className="vq-btn-ghost">
+              <Archive className="h-4 w-4" aria-hidden="true" />
+              {t("routes.vaults.roundArchive")}
+            </Link>
+          </div>
         </div>
       </section>
 

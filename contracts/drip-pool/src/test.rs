@@ -1057,6 +1057,282 @@ fn invariant_total_claimed_never_exceeds_rewards() {
     assert_eq!(client.savings(&bob).withdrawn_principal, 500);
 }
 
+// ── #440: claim deadline and unclaimed reward sweep ────────────────────────
+
+/// set_claim_deadline stores the deadline and is readable via the view.
+#[test]
+fn set_claim_deadline_by_signer_succeeds() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    env.ledger().set_timestamp(1_000);
+    client.set_claim_deadline(&admin, &1_500);
+    assert_eq!(client.claim_deadline(), Some(1_500));
+    assert!(!client.claim_deadline_passed());
+}
+
+/// set_claim_deadline emits an event.
+#[test]
+fn set_claim_deadline_emits_event() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    env.ledger().set_timestamp(1_000);
+    client.set_claim_deadline(&admin, &1_500);
+    let events = env.events().all();
+    assert!(!events.events().is_empty(), "no events emitted");
+}
+
+/// set_claim_deadline rejects a deadline that is not strictly in the future.
+#[test]
+fn set_claim_deadline_in_past_fails() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    env.ledger().set_timestamp(1_000);
+    assert_eq!(
+        client.try_set_claim_deadline(&admin, &1_000),
+        Err(Ok(Error::InvalidDeadline))
+    );
+    assert_eq!(
+        client.try_set_claim_deadline(&admin, &999),
+        Err(Ok(Error::InvalidDeadline))
+    );
+}
+
+/// Only an approved signer may set the claim deadline.
+#[test]
+fn set_claim_deadline_by_non_signer_fails() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    let rando = Address::generate(&env);
+    env.ledger().set_timestamp(1_000);
+    assert_eq!(
+        client.try_set_claim_deadline(&rando, &1_500),
+        Err(Ok(Error::Unauthorized))
+    );
+}
+
+/// Without a configured deadline, claims are always allowed.
+#[test]
+fn claim_without_deadline_never_blocked() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    let alice = Address::generate(&env);
+    client.join(&alice);
+    client.deposit(&alice, &1_000);
+    client.add_yield(&admin, &100);
+    client.credit_yield(&admin, &alice, &100);
+
+    env.ledger().set_timestamp(10_000_000);
+    assert_eq!(client.claim_reward(&alice), 100);
+}
+
+/// Boundary: the deadline instant itself is still claimable.
+#[test]
+fn claim_exactly_at_deadline_succeeds() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    let alice = Address::generate(&env);
+    client.join(&alice);
+    client.deposit(&alice, &1_000);
+    client.add_yield(&admin, &100);
+    client.credit_yield(&admin, &alice, &100);
+
+    env.ledger().set_timestamp(1_000);
+    client.set_claim_deadline(&admin, &2_000);
+
+    env.ledger().set_timestamp(2_000);
+    assert_eq!(client.claim_reward(&alice), 100);
+}
+
+/// Boundary: one second before the deadline is claimable.
+#[test]
+fn claim_one_second_before_deadline_succeeds() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    let alice = Address::generate(&env);
+    client.join(&alice);
+    client.deposit(&alice, &1_000);
+    client.add_yield(&admin, &100);
+    client.credit_yield(&admin, &alice, &100);
+
+    env.ledger().set_timestamp(1_000);
+    client.set_claim_deadline(&admin, &2_000);
+
+    env.ledger().set_timestamp(1_999);
+    assert_eq!(client.claim_reward(&alice), 100);
+}
+
+/// Boundary: one second after the deadline reverts.
+#[test]
+fn claim_one_second_after_deadline_reverts() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    let alice = Address::generate(&env);
+    client.join(&alice);
+    client.deposit(&alice, &1_000);
+    client.add_yield(&admin, &100);
+    client.credit_yield(&admin, &alice, &100);
+
+    env.ledger().set_timestamp(1_000);
+    client.set_claim_deadline(&admin, &2_000);
+
+    env.ledger().set_timestamp(2_001);
+    assert_eq!(
+        client.try_claim_reward(&alice),
+        Err(Ok(Error::ClaimDeadlinePassed))
+    );
+    // Reward remains unclaimed — deadline enforcement does not lose it.
+    assert_eq!(client.savings(&alice).claimed_reward, 0);
+}
+
+/// claim() (the alias) is also blocked once the deadline has passed.
+#[test]
+fn claim_alias_blocked_after_deadline() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    let alice = Address::generate(&env);
+    client.join(&alice);
+    client.deposit(&alice, &500);
+
+    env.ledger().set_timestamp(1_000);
+    client.set_claim_deadline(&admin, &2_000);
+    env.ledger().set_timestamp(2_001);
+
+    assert_eq!(
+        client.try_claim(&alice),
+        Err(Ok(Error::ClaimDeadlinePassed))
+    );
+}
+
+/// sweep_unclaimed cannot run before a deadline is configured.
+#[test]
+fn sweep_without_deadline_fails() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    let alice = Address::generate(&env);
+    client.join(&alice);
+    assert_eq!(
+        client.try_sweep_unclaimed(&admin, &alice),
+        Err(Ok(Error::NoClaimDeadline))
+    );
+}
+
+/// sweep_unclaimed cannot run before the deadline has passed (not even
+/// exactly at the deadline — the deadline instant still belongs to claim).
+#[test]
+fn sweep_before_deadline_fails() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    let alice = Address::generate(&env);
+    client.join(&alice);
+
+    env.ledger().set_timestamp(1_000);
+    client.set_claim_deadline(&admin, &2_000);
+
+    env.ledger().set_timestamp(2_000);
+    assert_eq!(
+        client.try_sweep_unclaimed(&admin, &alice),
+        Err(Ok(Error::ClaimDeadlineNotReached))
+    );
+}
+
+/// After the deadline passes, unclaimed reward is swept to the pool admin
+/// (treasury), the participant's reward is marked claimed, and the pool
+/// records that a sweep has occurred.
+#[test]
+fn sweep_after_deadline_moves_reward_to_admin() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    let alice = Address::generate(&env);
+    client.join(&alice);
+    client.deposit(&alice, &1_000);
+    client.add_yield(&admin, &300);
+    client.credit_yield(&admin, &alice, &300);
+
+    env.ledger().set_timestamp(1_000);
+    client.set_claim_deadline(&admin, &2_000);
+    env.ledger().set_timestamp(2_001);
+
+    assert!(!client.unclaimed_swept());
+    let swept = client.sweep_unclaimed(&admin, &alice);
+    assert_eq!(swept, 300);
+    assert!(client.unclaimed_swept());
+    assert!(client.claim_deadline_passed());
+
+    // Participant's reward is now marked claimed; nothing left to claim or
+    // sweep again.
+    assert_eq!(client.savings(&alice).claimed_reward, 300);
+    assert_eq!(
+        client.try_claim_reward(&alice),
+        Err(Ok(Error::ClaimDeadlinePassed))
+    );
+    assert_eq!(client.sweep_unclaimed(&admin, &alice), 0);
+
+    // Principal is untouched by the sweep.
+    assert_eq!(client.savings(&alice).deposited, 1_000);
+}
+
+/// sweep_unclaimed emits an event.
+#[test]
+fn sweep_emits_event() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    let alice = Address::generate(&env);
+    client.join(&alice);
+    client.deposit(&alice, &1_000);
+    client.add_yield(&admin, &100);
+    client.credit_yield(&admin, &alice, &100);
+
+    env.ledger().set_timestamp(1_000);
+    client.set_claim_deadline(&admin, &2_000);
+    env.ledger().set_timestamp(2_001);
+
+    client.sweep_unclaimed(&admin, &alice);
+    let events = env.events().all();
+    assert!(!events.events().is_empty(), "no events emitted");
+}
+
+/// Only an approved signer may sweep unclaimed rewards.
+#[test]
+fn sweep_by_non_signer_fails() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    let alice = Address::generate(&env);
+    client.join(&alice);
+
+    env.ledger().set_timestamp(1_000);
+    client.set_claim_deadline(&admin, &2_000);
+    env.ledger().set_timestamp(2_001);
+
+    let rando = Address::generate(&env);
+    assert_eq!(
+        client.try_sweep_unclaimed(&rando, &alice),
+        Err(Ok(Error::Unauthorized))
+    );
+}
+
+/// A participant who claims before the deadline has nothing left to sweep.
+#[test]
+fn claimed_reward_leaves_nothing_to_sweep() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    let alice = Address::generate(&env);
+    client.join(&alice);
+    client.deposit(&alice, &1_000);
+    client.add_yield(&admin, &100);
+    client.credit_yield(&admin, &alice, &100);
+
+    env.ledger().set_timestamp(1_000);
+    client.set_claim_deadline(&admin, &2_000);
+
+    // Alice claims before the deadline.
+    assert_eq!(client.claim_reward(&alice), 100);
+
+    env.ledger().set_timestamp(2_001);
+    assert_eq!(client.sweep_unclaimed(&admin, &alice), 0);
+    // Nothing was actually moved, so the pool-level sweep flag stays unset.
+    assert!(!client.unclaimed_swept());
+}
+
 /// Participant struct has the correct V2 fields via savings view.
 #[test]
 fn participant_v2_fields_present() {

@@ -31,6 +31,19 @@
 //! - All instance reads/writes extend instance TTL.
 //! - All persistent reads/writes extend participant TTL.
 //! - `renew_participant` and `renew_instance` are operator maintenance entrypoints.
+//!
+//! #440 Claim deadline and unclaimed reward handling
+//! - `Pool.claim_deadline` is an optional ledger timestamp, set per pool via
+//!   `set_claim_deadline`. `claim`/`claim_reward` succeed while
+//!   `timestamp <= claim_deadline` and revert with `ClaimDeadlinePassed` once
+//!   `timestamp > claim_deadline` — the deadline instant itself is claimable.
+//! - `sweep_unclaimed` lets a signer move a participant's unclaimed reward
+//!   (yield_accrued + prize − claimed_reward) to the pool admin (treasury)
+//!   once the deadline has strictly passed. It reuses the same `transfer_tokens`
+//!   SAC path as `withdraw`, so it is a no-op transfer when no token is
+//!   configured. `Pool.unclaimed_swept` flips to `true` on first sweep.
+//! - `claim_deadline`, `claim_deadline_passed` and `unclaimed_swept` are public
+//!   views so the frontend can read deadline/status without decoding `Pool`.
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, vec, Address, Env, Vec,
@@ -84,11 +97,15 @@ pub enum Error {
     ThresholdNotMet = 9, // not enough signatures
     AlreadySigned = 10,  // signer already approved this proposal
     ProposalNotFound = 11,
-    ProposalExpired = 12,    // proposal ledger deadline passed
-    InvalidAction = 13,      // payload fails reserve or signer-count checks
-    TokenNotConfigured = 14, // no accepted asset configured (#376)
-    AssetMismatch = 15,      // caller sent a different asset than the configured one (#376)
-    TransferFailed = 16,     // token transfer failed (#376)
+    ProposalExpired = 12,         // proposal ledger deadline passed
+    InvalidAction = 13,           // payload fails reserve or signer-count checks
+    TokenNotConfigured = 14,      // no accepted asset configured (#376)
+    AssetMismatch = 15,           // caller sent a different asset than the configured one (#376)
+    TransferFailed = 16,          // token transfer failed (#376)
+    ClaimDeadlinePassed = 17,     // claim attempted after the pool's claim deadline (#440)
+    ClaimDeadlineNotReached = 18, // sweep attempted before the deadline has passed (#440)
+    NoClaimDeadline = 19,         // sweep attempted but no deadline was ever configured (#440)
+    InvalidDeadline = 20,         // deadline must be strictly in the future (#440)
 }
 
 // ── Structs ────────────────────────────────────────────────────────────────
@@ -102,6 +119,8 @@ pub struct Pool {
     pub locked: bool,
     pub proposal_nonce: u32,
     pub distributable_yield: i128, // realized yield available for distribution (#382)
+    pub claim_deadline: Option<u64>, // ledger timestamp after which claims revert (#440)
+    pub unclaimed_swept: bool,     // true once an unclaimed-reward sweep has executed (#440)
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -310,6 +329,8 @@ impl DripPool {
             locked: false,
             proposal_nonce: 0,
             distributable_yield: 0,
+            claim_deadline: None,
+            unclaimed_swept: false,
         };
         let admins: Vec<Address> = vec![&env, admin.clone()];
         env.storage().instance().set(&DataKey::Admin, &admin);
@@ -693,6 +714,19 @@ impl DripPool {
     pub fn claim_reward(env: Env, who: Address) -> Result<i128, Error> {
         who.require_auth();
 
+        let pool: Pool = env
+            .storage()
+            .instance()
+            .get(&DataKey::Pool)
+            .ok_or(Error::NotInitialized)?;
+        // The deadline instant itself is still claimable; only strictly-later
+        // timestamps revert (#440).
+        if let Some(deadline) = pool.claim_deadline {
+            if env.ledger().timestamp() > deadline {
+                return Err(Error::ClaimDeadlinePassed);
+            }
+        }
+
         let mut p = Self::load_participant(&env, &who)?;
         let available = (p.yield_accrued + p.prize) - p.claimed_reward;
         p.claimed_reward += available;
@@ -703,6 +737,82 @@ impl DripPool {
             (who, available),
         );
         Ok(available)
+    }
+
+    // ── Claim deadline & unclaimed reward sweep (#440) ─────────────────────
+
+    /// Configure (or update) the pool's claim deadline as a ledger timestamp.
+    /// Only callable by an approved signer. The deadline must be strictly in
+    /// the future.
+    pub fn set_claim_deadline(env: Env, caller: Address, deadline: u64) -> Result<(), Error> {
+        caller.require_auth();
+        Self::require_signer(&env, &caller)?;
+        if deadline <= env.ledger().timestamp() {
+            return Err(Error::InvalidDeadline);
+        }
+
+        let mut pool: Pool = env
+            .storage()
+            .instance()
+            .get(&DataKey::Pool)
+            .ok_or(Error::NotInitialized)?;
+        pool.claim_deadline = Some(deadline);
+        env.storage().instance().set(&DataKey::Pool, &pool);
+        Self::bump_instance(&env);
+
+        env.events()
+            .publish((symbol_short!("pool"), symbol_short!("deadline")), deadline);
+        Ok(())
+    }
+
+    /// Sweep a participant's unclaimed reward (yield_accrued + prize −
+    /// claimed_reward) to the pool admin (treasury) once the claim deadline
+    /// has strictly passed. Only callable by an approved signer. Reuses the
+    /// SAC transfer path from `withdraw`, so it is a no-op transfer when no
+    /// token is configured. Marks the participant's reward as fully claimed
+    /// so it cannot be swept or claimed twice.
+    pub fn sweep_unclaimed(env: Env, caller: Address, who: Address) -> Result<i128, Error> {
+        caller.require_auth();
+        Self::require_signer(&env, &caller)?;
+
+        let mut pool: Pool = env
+            .storage()
+            .instance()
+            .get(&DataKey::Pool)
+            .ok_or(Error::NotInitialized)?;
+        let deadline = pool.claim_deadline.ok_or(Error::NoClaimDeadline)?;
+        if env.ledger().timestamp() <= deadline {
+            return Err(Error::ClaimDeadlineNotReached);
+        }
+
+        let mut p = Self::load_participant(&env, &who)?;
+        let unclaimed = (p.yield_accrued + p.prize) - p.claimed_reward;
+        if unclaimed <= 0 {
+            return Ok(0);
+        }
+        p.claimed_reward += unclaimed;
+        Self::save_participant(&env, &who, &p);
+
+        // Transfer first; roll back the participant's claimed_reward on
+        // failure so a failed sweep never silently burns the reward (#440,
+        // mirrors the withdraw/withdraw_locked rollback pattern from #376).
+        let contract_addr = env.current_contract_address();
+        if let Err(e) = Self::transfer_tokens(&env, &contract_addr, &pool.admin, &unclaimed) {
+            let mut p = Self::load_participant(&env, &who)?;
+            p.claimed_reward -= unclaimed;
+            Self::save_participant(&env, &who, &p);
+            return Err(e);
+        }
+
+        pool.unclaimed_swept = true;
+        env.storage().instance().set(&DataKey::Pool, &pool);
+        Self::bump_instance(&env);
+
+        env.events().publish(
+            (symbol_short!("pool"), symbol_short!("swept")),
+            (who, pool.admin.clone(), unclaimed),
+        );
+        Ok(unclaimed)
     }
 
     // ── Withdraw (#376: real token custody) ────────────────────────────────
@@ -898,6 +1008,41 @@ impl DripPool {
     /// View the configured token address (#376).
     pub fn token(env: Env) -> Result<Address, Error> {
         Self::get_token_address(&env)
+    }
+
+    /// View the configured claim deadline, if any (#440).
+    pub fn claim_deadline(env: Env) -> Result<Option<u64>, Error> {
+        let pool: Pool = env
+            .storage()
+            .instance()
+            .get(&DataKey::Pool)
+            .ok_or(Error::NotInitialized)?;
+        Ok(pool.claim_deadline)
+    }
+
+    /// True once a configured claim deadline has strictly passed. Returns
+    /// false when no deadline has been set (#440).
+    pub fn claim_deadline_passed(env: Env) -> Result<bool, Error> {
+        let pool: Pool = env
+            .storage()
+            .instance()
+            .get(&DataKey::Pool)
+            .ok_or(Error::NotInitialized)?;
+        Ok(match pool.claim_deadline {
+            Some(deadline) => env.ledger().timestamp() > deadline,
+            None => false,
+        })
+    }
+
+    /// True once at least one unclaimed-reward sweep has executed for this
+    /// pool (#440).
+    pub fn unclaimed_swept(env: Env) -> Result<bool, Error> {
+        let pool: Pool = env
+            .storage()
+            .instance()
+            .get(&DataKey::Pool)
+            .ok_or(Error::NotInitialized)?;
+        Ok(pool.unclaimed_swept)
     }
 }
 

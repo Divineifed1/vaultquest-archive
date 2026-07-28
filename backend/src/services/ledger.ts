@@ -55,13 +55,19 @@ function stableStringify(value: unknown): string {
   );
 }
 
+export type ActionConfirmedCallback = (actionId: string, actionType: string) => void;
+
 export class LedgerService {
-  private readonly defaultLeaseTtlMs = 5 * 60 * 1000;
+  private onActionConfirmedCallback: ActionConfirmedCallback | null = null;
 
   constructor(
     private readonly prisma: PrismaClient,
     private readonly cacheService?: CacheService
   ) {}
+
+  onActionConfirmed(callback: ActionConfirmedCallback): void {
+    this.onActionConfirmedCallback = callback;
+  }
 
   async createAction(input: IntentInput): Promise<ActionRecord> {
     const existing = await this.prisma.actionLedger.findUnique({
@@ -346,6 +352,15 @@ export class LedgerService {
           errorCode: input.statusHint === "reverted" ? ERROR_CODES.REVERTED_ON_CHAIN : null
         }
       });
+
+      if (input.statusHint === "confirmed" && row.actionType === "select_winner") {
+        try {
+          this.onActionConfirmedCallback?.(row.id, row.actionType);
+        } catch {
+          // callback errors should not break reconciliation
+        }
+      }
+
       await tx.actionLease.deleteMany({ where: { actionId: row.id } });
       return { matched: true };
     });

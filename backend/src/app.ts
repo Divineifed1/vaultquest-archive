@@ -11,10 +11,13 @@ import { metricsRoutes } from "./routes/metrics.js";
 import { prometheusRoutes } from "./routes/prometheus.js";
 import { healthRoutes } from "./routes/health.js";
 import { MetricsService } from "./services/metricsService.js";
+import { DrawProofService } from "./services/drawProofService.js";
+import { drawProofRoutes } from "./routes/drawProofs.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 import { rateLimiter } from "./middleware/rateLimiter.js";
 import { requireApiKey } from "./middleware/api-key-auth.js";
 import { createLogger } from "./logger.js";
+import { ok } from "./responses.js";
 import type { Logger } from "pino";
 import type { CacheService } from "./services/cacheService.js";
 import { walletAuthRoutes } from "./routes/walletAuth.js";
@@ -80,6 +83,15 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   const svc = new LedgerService(deps.prisma, deps.cacheService);
   const savedPoolsSvc = new SavedPoolsService(deps.prisma);
   const metricsSvc = new MetricsService(deps.prisma);
+  const drawProofSvc = new DrawProofService(deps.prisma, null, deps.logger);
+
+  svc.onActionConfirmed((actionId, actionType) => {
+    if (actionType === "select_winner") {
+      drawProofSvc.generateProof({ actionId }).catch((err) => {
+        deps.logger?.error({ err, actionId }, "draw proof generation failed");
+      });
+    }
+  });
 
   // API key guard for external-service endpoints (#273).
   // Guard is a no-op when apiKey is undefined (local dev without configuration).
@@ -96,11 +108,11 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   app.register(actionsRoutes(svc, apiKeyGuard));
   app.register(walletAuthRoutes(walletAuthSvc));
   app.register(healthRoutes(svc));
-  app.register(actionsRoutes(svc));
   app.register(savedPoolsRoutes(savedPoolsSvc));
   app.register(internalRoutes(svc, deps.internalSecret));
   app.register(metricsRoutes(metricsSvc, apiKeyGuard));
   app.register(prometheusRoutes);
+  app.register(drawProofRoutes(drawProofSvc));
 
   // Central Error Handler Middleware
   app.setErrorHandler(errorHandler);

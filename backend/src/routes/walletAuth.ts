@@ -13,6 +13,7 @@ const challengeBody = z.object({
 
 const verifyBody = z.object({
   challenge_id: z.string().uuid(),
+  payload: z.string().min(1),
   signature: z.string().min(1),
   public_key: z.string().min(1).max(120),
   network: z.string().min(1).max(64)
@@ -45,6 +46,7 @@ export const walletAuthRoutes = (svc: WalletAuthService): FastifyPluginAsync =>
       const body = verifyBody.parse(req.body);
       const session = await svc.verifyChallenge({
         challengeId: body.challenge_id,
+        payload: body.payload,
         signature: body.signature,
         publicKey: body.public_key,
         network: body.network

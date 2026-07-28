@@ -36,6 +36,6 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v6
         with:
-          version: 8
+          run_install: false
       - name: Run pnpm audit
         run: pnpm audit

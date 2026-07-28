@@ -43,7 +43,8 @@ export type DriftType =
   | "contradiction"
   | "orphaned_settlement"
   | "missing_settlement"
-  | "stale_pending_event";
+  | "stale_pending_event"
+  | "insolvency_drift";
 
 export interface DriftRecord {
   type: DriftType;

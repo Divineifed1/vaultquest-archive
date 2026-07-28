@@ -4,9 +4,9 @@ import {
   EmptyState,
   ErrorState,
   LoadingState,
-  StaleIndicator,
   WalletDisconnectedState,
 } from "../../components/FallbackStates";
+import { DataRefreshControl } from "../../components/DataRefreshControl";
 import type { SavedPoolEntry, PoolStatus } from "../contract/types";
 import { formatAmount, formatDate } from "../lib/format";
 import PoolStatusBadge from "./PoolStatusBadge";
@@ -31,6 +31,10 @@ export interface SavedPoolsWatchlistProps {
   onOpenPool?: (poolId: string) => void;
   onUnsave?: (entry: SavedPoolEntry) => void;
   savingPoolId?: string | null;
+  updatedAt?: number | null;
+  fetching?: boolean;
+  partialError?: Error | null;
+  refetch?: () => void;
 }
 
 const HeaderIcon: FC<{ children: ReactNode }> = ({ children }) => (
@@ -50,6 +54,10 @@ export const SavedPoolsWatchlist: FC<SavedPoolsWatchlistProps> = ({
   onOpenPool,
   onUnsave,
   savingPoolId = null,
+  updatedAt = null,
+  fetching = false,
+  partialError = null,
+  refetch = () => {},
 }) => {
   if (!walletConnected) {
     return <WalletDisconnectedState onConnect={onConnect} />;
@@ -82,7 +90,13 @@ export const SavedPoolsWatchlist: FC<SavedPoolsWatchlistProps> = ({
             <p className="text-sm text-gray-400">Pools you bookmarked for later.</p>
           </div>
         </div>
-        {stale && <StaleIndicator />}
+        <DataRefreshControl
+          updatedAt={updatedAt}
+          stale={stale}
+          fetching={fetching}
+          partialError={partialError}
+          onRefresh={refetch}
+        />
       </header>
 
       <div className="hidden overflow-hidden rounded-2xl border border-red-900/30 bg-[#1A0505]/60 lg:block">

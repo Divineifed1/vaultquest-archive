@@ -44,7 +44,23 @@ const schema = z.object({
    */
   BACKUP_DIR: z.string().min(1).optional(),
   BACKUP_RETAIN_DAYS: z.coerce.number().int().positive().default(7),
-  BACKUP_SCHEDULE: z.string().default("0 2 * * *")
+  BACKUP_SCHEDULE: z.string().default("0 2 * * *"),
+  /**
+   * Redis connection string for the caching layer (issue #485), e.g.
+   * `redis://localhost:6379` or a managed provider URL with credentials.
+   * When unset, caching gracefully degrades to direct database reads.
+   */
+  REDIS_URL: z.string().url().optional(),
+  /**
+   * Cache TTL (seconds) for the GET /api/categories response (issue #485).
+   */
+  CATEGORIES_CACHE_TTL_SECONDS: z.coerce.number().int().positive().default(3600),
+  /**
+   * Reminder lead time (hours) for maturity/claim-window notifications
+   * (issue #446). A reminder is generated once a saved pool's `locksAt` or
+   * `drawsAt` timestamp falls within this many hours of "now".
+   */
+  REMINDER_LEAD_HOURS: z.coerce.number().int().positive().default(24)
 });
 
 export type Env = z.infer<typeof schema>;
@@ -78,7 +94,10 @@ export function getEnv(): Env {
       API_KEY: process.env.API_KEY || undefined,
       BACKUP_DIR: process.env.BACKUP_DIR || undefined,
       BACKUP_RETAIN_DAYS: Number(process.env.BACKUP_RETAIN_DAYS ?? 7),
-      BACKUP_SCHEDULE: process.env.BACKUP_SCHEDULE ?? "0 2 * * *"
+      BACKUP_SCHEDULE: process.env.BACKUP_SCHEDULE ?? "0 2 * * *",
+      REDIS_URL: process.env.REDIS_URL || undefined,
+      CATEGORIES_CACHE_TTL_SECONDS: Number(process.env.CATEGORIES_CACHE_TTL_SECONDS ?? 3600),
+      REMINDER_LEAD_HOURS: Number(process.env.REMINDER_LEAD_HOURS ?? 24)
     } satisfies Env;
   }
   return parseEnv();

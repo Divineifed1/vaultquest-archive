@@ -1,21 +1,23 @@
 -- CreateTable
-CREATE TABLE "TransactionMetric" (
-    "id" TEXT NOT NULL PRIMARY KEY,
-    "actionId" TEXT NOT NULL,
-    "actionType" TEXT NOT NULL,
+CREATE TABLE "transaction_metrics" (
+    "id" UUID NOT NULL DEFAULT gen_random_uuid(),
+    "action_id" TEXT NOT NULL,
+    "action_type" TEXT NOT NULL,
     "network" TEXT NOT NULL,
-    "walletAddress" TEXT NOT NULL,
-    "submittedAt" DATETIME NOT NULL,
-    "confirmedAt" DATETIME,
-    "indexedAt" DATETIME,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    "wallet_address" TEXT NOT NULL,
+    "submitted_at" TIMESTAMP(3) NOT NULL,
+    "confirmed_at" TIMESTAMP(3),
+    "indexed_at" TIMESTAMP(3),
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "transaction_metrics_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateIndex
-CREATE INDEX "TransactionMetric_actionType_network_idx" ON "TransactionMetric"("actionType", "network");
+CREATE INDEX "transaction_metrics_action_type_network_idx" ON "transaction_metrics"("action_type", "network");
 
 -- CreateIndex
-CREATE INDEX "TransactionMetric_submittedAt_idx" ON "TransactionMetric"("submittedAt");
+CREATE INDEX "transaction_metrics_submitted_at_idx" ON "transaction_metrics"("submitted_at");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "TransactionMetric_actionId_key" ON "TransactionMetric"("actionId");
+CREATE UNIQUE INDEX "transaction_metrics_action_id_key" ON "transaction_metrics"("action_id");

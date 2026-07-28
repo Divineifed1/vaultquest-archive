@@ -222,6 +222,40 @@ model DrawProof {
   @@map("draw_proofs")
 }
 
+model Category {
+  id          String   @id @default(uuid()) @db.Uuid
+  slug        String   @unique
+  name        String
+  description String?
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("categories")
+}
+
+model Notification {
+  id             String    @id @default(uuid()) @db.Uuid
+  walletAddress  String    @map("wallet_address")
+  type           String
+  positionId     String    @map("position_id")
+  title          String
+  message        String
+  dismissedAt    DateTime? @map("dismissed_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  @@unique([walletAddress, positionId, type])
+  @@index([walletAddress, dismissedAt])
+  @@map("notifications")
+}
+
+model NotificationPreference {
+  walletAddress String   @id @map("wallet_address")
+  disabledTypes String[] @default([]) @map("disabled_types")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@map("notification_preferences")
+}
+
 model TransactionMetric {
   id            String    @id @default(uuid()) @db.Uuid
   actionId      String    @unique @map("action_id")

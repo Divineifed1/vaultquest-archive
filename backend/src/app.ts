@@ -25,6 +25,10 @@ import type { CacheService } from "./services/cacheService.js";
 import { walletAuthRoutes } from "./routes/walletAuth.js";
 import { WalletAuthService } from "./services/walletAuth.js";
 import { transactionMetricsRoutes } from "./routes/transactionMetrics.js";
+import { CategoryService } from "./services/categoryService.js";
+import { categoriesRoutes } from "./routes/categories.js";
+import { NotificationService } from "./services/notificationService.js";
+import { notificationsRoutes } from "./routes/notifications.js";
 
 export type AppDeps = {
   prisma: PrismaClient;
@@ -33,6 +37,10 @@ export type AppDeps = {
   apiKey?: string;
   logger?: Logger;
   cacheService?: CacheService;
+  /** TTL (seconds) for the GET /api/categories cache entry (issue #485). */
+  categoriesCacheTtlSeconds?: number;
+  /** Reminder lead time (hours) for notification generation (issue #446). */
+  reminderLeadHours?: number;
 };
 
 export function buildApp(deps: AppDeps): FastifyInstance {
@@ -102,6 +110,8 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   const apiKeyGuard = requireApiKey(deps.apiKey);
 
   const walletAuthSvc = new WalletAuthService(deps.prisma);
+  const categorySvc = new CategoryService(deps.prisma, deps.cacheService, deps.categoriesCacheTtlSeconds);
+  const notificationSvc = new NotificationService(deps.prisma, deps.reminderLeadHours);
 
   app.get("/health", async () => ok({ ok: true }));
   app.get("/health/indexer", async () => {
@@ -119,6 +129,8 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   app.register(prometheusRoutes);
   app.register(drawProofRoutes(drawProofSvc));
   app.register(transactionMetricsRoutes(deps.prisma, apiKeyGuard));
+  app.register(categoriesRoutes(categorySvc, apiKeyGuard));
+  app.register(notificationsRoutes(notificationSvc));
 
   // Central Error Handler Middleware
   app.setErrorHandler(errorHandler);

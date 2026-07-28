@@ -1,8 +1,10 @@
 [workspace]
 resolver = "2"
 members = [
+    "common",
     "drip-pool",
     "mock-yield",
+    "vault",
 ]
 
 [workspace.package]

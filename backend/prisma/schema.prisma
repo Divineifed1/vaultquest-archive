@@ -221,3 +221,19 @@ model DrawProof {
   @@index([contractId, createdAt(sort: Desc)])
   @@map("draw_proofs")
 }
+
+model TransactionMetric {
+  id            String    @id @default(uuid()) @db.Uuid
+  actionId      String    @unique @map("action_id")
+  actionType    String    @map("action_type")
+  network       String
+  walletAddress String    @map("wallet_address")
+  submittedAt   DateTime  @map("submitted_at")
+  confirmedAt   DateTime? @map("confirmed_at")
+  indexedAt     DateTime? @map("indexed_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  @@index([actionType, network])
+  @@index([submittedAt])
+  @@map("transaction_metrics")
+}

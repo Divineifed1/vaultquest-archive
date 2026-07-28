@@ -2,7 +2,7 @@ import { buildApp } from "./app.js";
 import { getEnv } from "./env.js";
 import { getPrisma } from "./db.js";
 import { createLogger } from "./logger.js";
-import { startReconcilerCron, startQuestCron, startIndexerCron } from "./cron.js";
+import { startReconcilerCron, startQuestCron, startIndexerCron, startBackupCron } from "./cron.js";
 import { CacheService } from "./services/cacheService.js";
 import { LedgerService } from "./services/ledger.js";
 import {
@@ -10,10 +10,56 @@ import {
   SorobanRpcEventSource,
   defaultXdrDecoder
 } from "./services/stellarIndexer.js";
+import { setAttestationInfo } from "./routes/health.js";
 import type { ScheduledTask } from "node-cron";
+
+let loadManifest: typeof import("../../../lib/deployment-manifest.js").loadManifest | undefined;
+let validateManifestAgainstEnv: typeof import("../../../lib/deployment-manifest.js").validateManifestAgainstEnv | undefined;
+try {
+  const mod = await import("../../../lib/deployment-manifest.js");
+  loadManifest = mod.loadManifest;
+  validateManifestAgainstEnv = mod.validateManifestAgainstEnv;
+} catch {
+  // Manifest module not available — skip attestation (backward compatible)
+}
 
 const env = getEnv();
 const logger = createLogger(env.LOG_LEVEL);
+
+if (loadManifest && validateManifestAgainstEnv) {
+  try {
+    const manifest = loadManifest(env.DEPLOYMENT_MANIFEST_PATH);
+    const mismatches = validateManifestAgainstEnv(manifest);
+    if (mismatches.length > 0) {
+      logger.fatal({ mismatches }, "Deployment manifest mismatch — refusing to start");
+      process.exit(1);
+    }
+    setAttestationInfo({
+      manifestVersion: manifest.version,
+      environment: manifest.environment,
+      network: manifest.network.name,
+      buildSha: manifest.build.commitSha,
+      verified: true,
+    });
+    logger.info(
+      { version: manifest.version, environment: manifest.environment, network: manifest.network.name },
+      "deployment manifest verified"
+    );
+    if (env.NETWORK_PASSPHRASE && env.NETWORK_PASSPHRASE !== manifest.network.passphrase) {
+      logger.fatal(
+        { envPassphrase: env.NETWORK_PASSPHRASE, manifestPassphrase: manifest.network.passphrase },
+        "NETWORK_PASSPHRASE does not match deployment manifest — refusing to start"
+      );
+      process.exit(1);
+    }
+  } catch (err) {
+    logger.error({ err }, "Failed to load deployment manifest — attestation skipped");
+  }
+} else if (env.DEPLOYMENT_MANIFEST_PATH) {
+  logger.warn("DEPLOYMENT_MANIFEST_PATH set but manifest module unavailable — attestation skipped");
+} else {
+  logger.info("No deployment manifest configured — attestation skipped");
+}
 const prisma = getPrisma(env.DATABASE_URL);
 
 // Initialize Cache Service (pointing to REDIS_URL if set, otherwise defaults to local Redis)
@@ -22,6 +68,7 @@ const cacheService = new CacheService(prisma, logger, process.env.REDIS_URL);
 const app = buildApp({
   prisma,
   internalSecret: env.INTERNAL_SERVICE_SECRET,
+  apiKey: env.API_KEY,
   logger,
   cacheService
 });
@@ -59,12 +106,29 @@ if (env.SOROBAN_RPC_URL && env.INDEXER_CONTRACT_IDS) {
   logger.info({ contractIds }, "stellar indexer daemon started");
 }
 
+// Automated database backup cron (#275). Only started when BACKUP_DIR is set.
+let backupCronTask: ScheduledTask | undefined;
+if (env.BACKUP_DIR) {
+  backupCronTask = startBackupCron({
+    backupDir: env.BACKUP_DIR,
+    databaseUrl: env.DATABASE_URL,
+    retainDays: env.BACKUP_RETAIN_DAYS,
+    schedule: env.BACKUP_SCHEDULE,
+    logger
+  });
+  logger.info(
+    { backupDir: env.BACKUP_DIR, schedule: env.BACKUP_SCHEDULE },
+    "backup cron started"
+  );
+}
+
 async function shutdown(signal: string) {
   logger.info({ signal }, "shutting down");
   clearInterval(cacheSyncInterval);
   cronTask.stop();
   questCronTask.stop();
   indexerCronTask?.stop();
+  backupCronTask?.stop();
   await app.close();
   await cacheService.disconnect();
   await prisma.$disconnect();

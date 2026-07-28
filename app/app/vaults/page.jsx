@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from "react";
 import Link from "next/link";
+import { useTranslation } from "next-i18next";
 import GasPrioritySelector from "@/components/app/GasPrioritySelector";
 import DepositModal from "@/components/app/DepositModal";
 import VaultFilters from "@/components/app/VaultFilters";
@@ -30,6 +31,7 @@ const INITIAL_FILTERS = {
 };
 
 export default function VaultsPage() {
+  const { t } = useTranslation("common");
   const [isDepositModalOpen, setIsDepositModalOpen] = useState(false);
   const [filters, setFilters] = useState(INITIAL_FILTERS);
   const [viewMode, setViewMode] = useState("table");
@@ -131,15 +133,21 @@ export default function VaultsPage() {
       <section className="space-y-3">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <h1 className="text-3xl font-bold text-vault-text">Vaults</h1>
+            <h1 className="text-3xl font-bold text-vault-text">{t("routes.vaults.title")}</h1>
             <p className="mt-3 max-w-2xl text-vault-muted">
-              Manage your pool positions and drip deposits. Review live fee tiers
-              before you submit a transaction.
+              {t("routes.vaults.subtitle")}{" "}
+              <Link
+                href="/app/vaults/strategies"
+                className="text-vault-accent underline hover:text-vault-accent/80 font-medium"
+              >
+                {t("routes.vaults.strategies")}
+              </Link>
+              .
             </p>
           </div>
           <Link href="/app/vaults/archive" className="vq-btn-ghost self-start">
             <Archive className="h-4 w-4" aria-hidden="true" />
-            Round archive
+            {t("routes.vaults.roundArchive")}
           </Link>
         </div>
       </section>
@@ -177,14 +185,13 @@ export default function VaultsPage() {
             <section className="vq-glass-hover flex flex-col justify-between p-6">
               <div>
                 <p className="text-xs font-medium uppercase tracking-[0.24em] text-vault-muted">
-                  Deposit review
+                  {t("routes.vaults.depositReview")}
                 </p>
                 <h2 className="mt-1 text-xl font-semibold text-vault-text">
-                  Quick Deposit Flow
+                  {t("routes.vaults.quickDepositTitle")}
                 </h2>
                 <p className="mt-2 text-sm text-vault-muted">
-                  Select a vault below to begin your deposit. Live network
-                  estimates will be calculated automatically.
+                  {t("routes.vaults.quickDepositBody")}
                 </p>
               </div>
 
@@ -194,13 +201,13 @@ export default function VaultsPage() {
                   onClick={() => setIsDepositModalOpen(true)}
                   className="vq-btn-primary"
                 >
-                  Open deposit modal
+                  {t("routes.vaults.openDepositModal")}
                 </button>
                 <Link
                   href="/app/vaults/planner"
                   className="vq-btn-ghost"
                 >
-                  Recurring Planner
+                  {t("routes.vaults.recurringPlanner")}
                 </Link>
               </div>
             </section>
@@ -210,7 +217,7 @@ export default function VaultsPage() {
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="text-xl font-bold text-vault-text">
-                  Available Pools
+                  {t("routes.vaults.availablePools")}
                 </h3>
                 <p className="text-sm text-vault-muted">
                   Showing {filteredVaults.length} of {MOCK_VAULTS.length} vaults

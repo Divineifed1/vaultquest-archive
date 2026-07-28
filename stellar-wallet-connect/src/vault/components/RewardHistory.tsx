@@ -52,15 +52,19 @@ const OutcomeBadge: FC<{ status: RewardOutcome }> = ({ status }) => {
 
 const TxLink: FC<{ txHash: string | null; network: StellarNetwork }> = ({ txHash, network }) =>
   txHash ? (
-    <a
-      href={explorerTxUrl(txHash, network)}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="inline-flex items-center gap-1 text-sm text-red-300 hover:text-red-200 hover:underline"
-    >
-      {truncateAddress(txHash)}
-      <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
-    </a>
+    explorerTxUrl(txHash, network) ? (
+      <a
+        href={explorerTxUrl(txHash, network) ?? undefined}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-flex items-center gap-1 text-sm text-red-300 hover:text-red-200 hover:underline"
+      >
+        {truncateAddress(txHash)}
+        <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+      </a>
+    ) : (
+      <span className="text-sm text-gray-300">{truncateAddress(txHash)}</span>
+    )
   ) : (
     <span className="text-sm text-gray-500">—</span>
   );

@@ -2,6 +2,30 @@ import type { PrismaClient } from "@prisma/client";
 
 /**
  * Persists user-saved vault/pool references for quick access and watchlists.
+ *
+ * ## Wallet-scoping invariant
+ *
+ * Every record in the `SavedPool` table is keyed on `(walletAddress, poolId)`.
+ * This composite unique key (enforced by the DB schema) guarantees:
+ *
+ * 1. **List isolation** — `listSavedPools(wallet)` only returns rows matching
+ *    that exact wallet address. No cross-wallet leakage is possible at the
+ *    query level.
+ *
+ * 2. **Delete isolation** — `unsavePool(wallet, poolId)` filters on both
+ *    columns. A caller cannot remove another wallet's record by supplying a
+ *    poolId that happens to match; the wallet address must also match.
+ *
+ * 3. **Shared pools** — Two wallets may independently save the same `poolId`.
+ *    These are separate rows with independent lifecycles. Deleting one wallet's
+ *    copy has no effect on the other wallet's copy.
+ *
+ * 4. **Cache / invalidation scope** — Any future in-memory or Redis cache
+ *    MUST include the wallet address in the cache key
+ *    (e.g. `saved-pools:<walletAddress>`). Flushing or evicting one wallet's
+ *    cache entry MUST NOT flush entries for other wallets.
+ *
+ * These invariants are regression-tested in `tests/saved-pools-auth.spec.ts`.
  */
 
 export interface SavedPoolInput {

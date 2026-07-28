@@ -24,6 +24,7 @@ import type { Logger } from "pino";
 import type { CacheService } from "./services/cacheService.js";
 import { walletAuthRoutes } from "./routes/walletAuth.js";
 import { WalletAuthService } from "./services/walletAuth.js";
+import { transactionMetricsRoutes } from "./routes/transactionMetrics.js";
 
 export type AppDeps = {
   prisma: PrismaClient;
@@ -117,6 +118,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   app.register(metricsRoutes(metricsSvc, apiKeyGuard));
   app.register(prometheusRoutes);
   app.register(drawProofRoutes(drawProofSvc));
+  app.register(transactionMetricsRoutes(deps.prisma, apiKeyGuard));
 
   // Central Error Handler Middleware
   app.setErrorHandler(errorHandler);

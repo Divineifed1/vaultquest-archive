@@ -2,7 +2,13 @@ import { buildApp } from "./app.js";
 import { getEnv } from "./env.js";
 import { getPrisma } from "./db.js";
 import { createLogger } from "./logger.js";
-import { startReconcilerCron, startQuestCron, startIndexerCron, startBackupCron } from "./cron.js";
+import {
+  startReconcilerCron,
+  startQuestCron,
+  startIndexerCron,
+  startBackupCron,
+  startNotificationReminderCron
+} from "./cron.js";
 import { CacheService } from "./services/cacheService.js";
 import { LedgerService } from "./services/ledger.js";
 import {
@@ -70,7 +76,9 @@ const app = buildApp({
   internalSecret: env.INTERNAL_SERVICE_SECRET,
   apiKey: env.API_KEY,
   logger,
-  cacheService
+  cacheService,
+  categoriesCacheTtlSeconds: env.CATEGORIES_CACHE_TTL_SECONDS,
+  reminderLeadHours: env.REMINDER_LEAD_HOURS
 });
 
 // Periodic write-behind sync task: sync checkpoint from cache to PostgreSQL database every 15 seconds
@@ -90,6 +98,13 @@ const cronTask = startReconcilerCron({
 });
 
 const questCronTask = startQuestCron({ prisma, logger });
+
+// Maturity / claim-window reminder notifications (issue #446).
+const notificationCronTask = startNotificationReminderCron({
+  prisma,
+  leadHours: env.REMINDER_LEAD_HOURS,
+  logger
+});
 
 // Stellar indexer daemon (#indexer). Only started when a Soroban RPC endpoint
 // and at least one contract id are configured.
@@ -127,6 +142,7 @@ async function shutdown(signal: string) {
   clearInterval(cacheSyncInterval);
   cronTask.stop();
   questCronTask.stop();
+  notificationCronTask.stop();
   indexerCronTask?.stop();
   backupCronTask?.stop();
   await app.close();

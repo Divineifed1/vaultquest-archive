@@ -4,6 +4,7 @@ import type { Logger } from "pino";
 import { sweepOrphans } from "./services/reconciler.js";
 import { QuestService } from "./services/questService.js";
 import { BackupService } from "./services/backupService.js";
+import { NotificationService } from "./services/notificationService.js";
 import type { StellarIndexer } from "./services/stellarIndexer.js";
 import { pingDatabase } from "./db.js";
 
@@ -110,6 +111,32 @@ export function startBackupCron(opts: {
       opts.logger.info({ result }, "backup: completed");
     } catch (err) {
       opts.logger.error({ err }, "backup: failed");
+    }
+  });
+  return task;
+}
+
+/**
+ * Periodically generates maturity / claim-window reminder notifications
+ * (issue #446). `leadHours` controls how far ahead of a position's lock/draw
+ * date a reminder is created; generation is idempotent so re-running never
+ * duplicates notifications.
+ */
+export function startNotificationReminderCron(opts: {
+  prisma: PrismaClient;
+  leadHours: number;
+  logger: Logger;
+  schedule?: string;
+}): cron.ScheduledTask {
+  const schedule = opts.schedule ?? "*/5 * * * *";
+  const notificationService = new NotificationService(opts.prisma, opts.leadHours);
+
+  const task = cron.schedule(schedule, async () => {
+    try {
+      const created = await notificationService.generateReminders();
+      opts.logger.info({ created }, "notification reminder sweep complete");
+    } catch (err) {
+      opts.logger.error({ err }, "notification reminder sweep failed");
     }
   });
   return task;

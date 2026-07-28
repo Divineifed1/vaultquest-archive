@@ -15,6 +15,7 @@ import VaultNotificationSettings from "@/components/app/VaultNotificationSetting
 import WalletReconnectGuidance from "@/components/app/WalletReconnectGuidance";
 import SecurityTipsPanel from "@/components/app/SecurityTipsPanel";
 import VaultOnboardingTour, { useRestartTour } from "@/components/app/VaultOnboardingTour";
+import SavedPoolsWatchlist from "@/components/app/SavedPoolsWatchlist";
 import { useYieldCounter } from "@/components/hooks/useYieldCounter";
 import { formatUsd } from "@/lib/yield-counter";
 import { DEMO_PORTFOLIO, DEMO_TRANSACTIONS } from "@/lib/demo-portfolio";
@@ -95,6 +96,8 @@ function ConnectedDashboard({ isNetworkMismatch, onRetry, locale }) {
       <ProfileEditor />
 
       <VaultNotificationSettings />
+
+      <SavedPoolsWatchlist />
 
       <PrizeChart />
 

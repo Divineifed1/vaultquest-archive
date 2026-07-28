@@ -5,6 +5,7 @@ import { motion } from "framer-motion";
 import Link from "next/link";
 import { ArrowUpDown, ArrowUpRight, Wallet, Info } from "lucide-react";
 import VaultEmptyState from "@/components/app/VaultEmptyState";
+import SavePoolButton from "@/components/app/SavePoolButton";
 
 export default function VaultComparisonTable({ vaults = [], sortBy = "apy", suggestions = null, onSuggestionClick = null, onClearFilters = null }) {
   const [sortConfig, setSortConfig] = useState({ key: sortBy, direction: "desc" });
@@ -147,9 +148,12 @@ export default function VaultComparisonTable({ vaults = [], sortBy = "apy", sugg
                 {vault.lastActivity ? new Date(vault.lastActivity).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : 'N/A'}
               </td>
               <td className="px-6 py-4 text-right">
-                <Link href={`/app/vaults/${vault.id}`} className="inline-flex items-center gap-1 rounded-lg border border-vault-border bg-vault-surface px-3 py-1.5 text-sm font-medium text-vault-text transition-all hover:border-vault-accent hover:text-vault-accent">
-                  View <ArrowUpRight size={14} />
-                </Link>
+                <div className="flex items-center justify-end gap-2">
+                  <SavePoolButton pool={vault} />
+                  <Link href={`/app/vaults/${vault.id}`} className="inline-flex items-center gap-1 rounded-lg border border-vault-border bg-vault-surface px-3 py-1.5 text-sm font-medium text-vault-text transition-all hover:border-vault-accent hover:text-vault-accent">
+                    View <ArrowUpRight size={14} />
+                  </Link>
+                </div>
               </td>
             </motion.tr>
           ))}

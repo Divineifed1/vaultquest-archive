@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import { Wallet, Info, ArrowUpRight } from "lucide-react";
 import RoundStatusBadge from "@/components/app/RoundStatusBadge";
+import SavePoolButton from "@/components/app/SavePoolButton";
 import { MOCK_VAULTS } from "@/lib/vault-mock-data";
 
 export { MOCK_VAULTS, VAULT_ROUND_ARCHIVE } from "@/lib/vault-mock-data";
@@ -60,7 +61,10 @@ export default function VaultList({ vaults = [], suggestions = null, onSuggestio
                   <p className="text-xs text-vault-muted">{vault.network} • {vault.asset}</p>
                 </div>
               </div>
-              <RoundStatusBadge status={vault.status} className="shrink-0" />
+              <div className="flex items-center gap-2 shrink-0">
+                <SavePoolButton pool={vault} />
+                <RoundStatusBadge status={vault.status} />
+              </div>
             </div>
 
             <div className="mt-6 grid grid-cols-3 gap-3 border-t border-vault-border pt-4">

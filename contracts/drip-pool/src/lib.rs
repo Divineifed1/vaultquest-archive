@@ -120,9 +120,9 @@ pub enum Error {
     ClaimDeadlineNotReached = 18, // sweep attempted before the deadline has passed (#440)
     NoClaimDeadline = 19,         // sweep attempted but no deadline was ever configured (#440)
     InvalidDeadline = 20,         // deadline must be strictly in the future (#440)
-    StrategyNotSet = 21,          // no yield strategy configured (#496)
-    StrategyVersionUnsupported = 22, // strategy failed the interface capability/version check (#496)
-    InsufficientReserve = 23,     // deploy_to_strategy exceeds idle (non-deployed) principal (#496)
+    InEmergency = 21,             // action blocked while in emergency mode (#512)
+    NotInEmergency = 22,          // emergency exit blocked while not in emergency mode (#512)
+    Insolvent = 23,               // principal coverage below policy (#512)
 }
 
 // ── Structs ────────────────────────────────────────────────────────────────
@@ -138,10 +138,8 @@ pub struct Pool {
     pub distributable_yield: i128, // realized yield available for distribution (#382)
     pub claim_deadline: Option<u64>, // ledger timestamp after which claims revert (#440)
     pub unclaimed_swept: bool,     // true once an unclaimed-reward sweep has executed (#440)
-    pub strategy: Option<Address>, // governed yield-strategy address (#496)
-    pub principal_in_strategy: i128, // principal currently deployed to `strategy`, tracked
-                                    // separately from `total_deposited` (user liability) and
-                                    // `distributable_yield` (realized, spendable) (#496)
+    pub is_emergency: bool,        // true when loss circuit breaker triggered (#512)
+    pub emergency_assets: i128,    // available assets recorded for pro-rata exit (#512)
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -185,6 +183,9 @@ pub enum ProposalAction {
     AddAdmin(Address),
     RemoveAdmin(Address),
     SetThreshold(u32), // change the approval threshold (#383)
+    TriggerEmergency(i128), // enter emergency mode with available asset amount (#512)
+    Recapitalize(i128),     // inject capital into emergency pool (#512)
+    ResumeNormal,           // return to normal operations (#512)
 }
 
 // ── Contract ───────────────────────────────────────────────────────────────
@@ -352,8 +353,8 @@ impl DripPool {
             distributable_yield: 0,
             claim_deadline: None,
             unclaimed_swept: false,
-            strategy: None,
-            principal_in_strategy: 0,
+            is_emergency: false,
+            emergency_assets: 0,
         };
         let admins: Vec<Address> = vec![&env, admin.clone()];
         env.storage().instance().set(&DataKey::Admin, &admin);
@@ -423,6 +424,21 @@ impl DripPool {
                 let admins = Self::get_admins(&env);
                 if *t == 0 || *t > admins.len() {
                     return Err(Error::InvalidAction);
+                }
+            }
+            ProposalAction::TriggerEmergency(assets) => {
+                if *assets < 0 {
+                    return Err(Error::InvalidAmount);
+                }
+            }
+            ProposalAction::Recapitalize(amount) => {
+                if *amount <= 0 {
+                    return Err(Error::InvalidAmount);
+                }
+            }
+            ProposalAction::ResumeNormal => {
+                if pool.emergency_assets < pool.total_deposited {
+                    return Err(Error::Insolvent);
                 }
             }
             _ => {}
@@ -561,6 +577,52 @@ impl DripPool {
                 }
                 env.storage().instance().set(&DataKey::Threshold, &t);
             }
+            ProposalAction::TriggerEmergency(assets) => {
+                let mut pool: Pool = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::Pool)
+                    .ok_or(Error::NotInitialized)?;
+                pool.is_emergency = true;
+                pool.emergency_assets = assets;
+                env.storage().instance().set(&DataKey::Pool, &pool);
+                env.events().publish(
+                    (symbol_short!("emergency"), symbol_short!("triggered")),
+                    assets,
+                );
+            }
+            ProposalAction::Recapitalize(amount) => {
+                if amount <= 0 {
+                    return Err(Error::InvalidAmount);
+                }
+                let mut pool: Pool = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::Pool)
+                    .ok_or(Error::NotInitialized)?;
+                pool.emergency_assets = pool.emergency_assets.saturating_add(amount);
+                env.storage().instance().set(&DataKey::Pool, &pool);
+                env.events().publish(
+                    (symbol_short!("emergency"), symbol_short!("recap")),
+                    amount,
+                );
+            }
+            ProposalAction::ResumeNormal => {
+                let mut pool: Pool = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::Pool)
+                    .ok_or(Error::NotInitialized)?;
+                if pool.emergency_assets < pool.total_deposited {
+                    return Err(Error::Insolvent);
+                }
+                pool.is_emergency = false;
+                env.storage().instance().set(&DataKey::Pool, &pool);
+                env.events().publish(
+                    (symbol_short!("emergency"), symbol_short!("resumed")),
+                    pool.total_deposited,
+                );
+            }
         }
         Ok(())
     }
@@ -568,6 +630,14 @@ impl DripPool {
     // ── Join ───────────────────────────────────────────────────────────────
     pub fn join(env: Env, who: Address) -> Result<(), Error> {
         who.require_auth();
+        let pool: Pool = env
+            .storage()
+            .instance()
+            .get(&DataKey::Pool)
+            .ok_or(Error::NotInitialized)?;
+        if pool.is_emergency {
+            return Err(Error::InEmergency);
+        }
         if Self::has_participant(&env, &who) {
             return Err(Error::AlreadyJoined);
         }
@@ -599,15 +669,19 @@ impl DripPool {
             return Err(Error::InvalidAmount);
         }
 
-        let old_participant: Option<Participant> = {
-            let key = DataKey::Participant(who.clone());
-            env.storage().persistent().get(&key)
-        };
         let old_pool: Pool = env
             .storage()
             .instance()
             .get(&DataKey::Pool)
             .ok_or(Error::NotInitialized)?;
+        if old_pool.is_emergency {
+            return Err(Error::InEmergency);
+        }
+
+        let old_participant: Option<Participant> = {
+            let key = DataKey::Participant(who.clone());
+            env.storage().persistent().get(&key)
+        };
 
         // Transfer tokens from caller to this contract (#376)
         let contract_addr = env.current_contract_address();
@@ -907,6 +981,9 @@ impl DripPool {
             .instance()
             .get(&DataKey::Pool)
             .ok_or(Error::NotInitialized)?;
+        if pool.is_emergency {
+            return Err(Error::InEmergency);
+        }
         pool.distributable_yield += amount;
         env.storage().instance().set(&DataKey::Pool, &pool);
         Self::bump_instance(&env);
@@ -931,6 +1008,9 @@ impl DripPool {
             .instance()
             .get(&DataKey::Pool)
             .ok_or(Error::NotInitialized)?;
+        if pool.is_emergency {
+            return Err(Error::InEmergency);
+        }
         if amount > pool.distributable_yield {
             return Err(Error::InvalidAction);
         }
@@ -1012,6 +1092,10 @@ impl DripPool {
             .get(&DataKey::Pool)
             .ok_or(Error::NotInitialized)?;
 
+        if pool.is_emergency {
+            return Err(Error::InEmergency);
+        }
+
         let winner = pool.admin.clone();
 
         // Auto-join the winner if they aren't yet a participant
@@ -1039,6 +1123,70 @@ impl DripPool {
             (winner.clone(), prize),
         );
         Ok(winner)
+    }
+
+    // ── Emergency Pro-rata Exit (#512) ────────────────────────────────────
+    pub fn emergency_withdraw(env: Env, who: Address) -> Result<i128, Error> {
+        who.require_auth();
+
+        let mut pool: Pool = env
+            .storage()
+            .instance()
+            .get(&DataKey::Pool)
+            .ok_or(Error::NotInitialized)?;
+
+        if !pool.is_emergency {
+            return Err(Error::NotInEmergency);
+        }
+
+        let mut p = Self::load_participant(&env, &who)?;
+        let unwithdrawn = p.deposited - p.withdrawn_principal;
+        if unwithdrawn <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+
+        let payout = if pool.total_deposited > 0 && pool.emergency_assets > 0 {
+            (unwithdrawn.saturating_mul(pool.emergency_assets)) / pool.total_deposited
+        } else {
+            0
+        };
+
+        pool.total_deposited = pool.total_deposited.saturating_sub(unwithdrawn);
+        pool.emergency_assets = pool.emergency_assets.saturating_sub(payout);
+        env.storage().instance().set(&DataKey::Pool, &pool);
+
+        p.withdrawn_principal += unwithdrawn;
+        Self::save_participant(&env, &who, &p);
+
+        let contract_addr = env.current_contract_address();
+        if payout > 0 {
+            let _ = Self::transfer_tokens(&env, &contract_addr, &who, &payout);
+        }
+
+        env.events().publish(
+            (symbol_short!("emergency"), symbol_short!("withdraw")),
+            (who, unwithdrawn, payout),
+        );
+
+        Ok(payout)
+    }
+
+    pub fn is_emergency(env: Env) -> Result<bool, Error> {
+        let pool: Pool = env
+            .storage()
+            .instance()
+            .get(&DataKey::Pool)
+            .ok_or(Error::NotInitialized)?;
+        Ok(pool.is_emergency)
+    }
+
+    pub fn emergency_assets(env: Env) -> Result<i128, Error> {
+        let pool: Pool = env
+            .storage()
+            .instance()
+            .get(&DataKey::Pool)
+            .ok_or(Error::NotInitialized)?;
+        Ok(pool.emergency_assets)
     }
 
     // ── Views ──────────────────────────────────────────────────────────────

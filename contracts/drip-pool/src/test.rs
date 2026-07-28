@@ -1348,3 +1348,122 @@ fn participant_v2_fields_present() {
     // V1 field that should NOT be present
     // The following would fail to compile: savings.claimable
 }
+
+// ── #512: Loss Circuit Breaker & Emergency Exit ────────────────────────────
+
+/// draw_winner and deposit are blocked while in emergency mode.
+#[test]
+fn draw_winner_blocked_in_emergency() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    let signer2 = Address::generate(&env);
+    client.seed_admin(&admin, &signer2); // 2 signers for threshold
+
+    // Trigger emergency mode with 500 available assets
+    let pid = client.propose(&admin, &ProposalAction::TriggerEmergency(500));
+    client.approve(&signer2, &pid);
+
+    assert!(client.is_emergency());
+    assert_eq!(client.emergency_assets(), 500);
+
+    // draw_winner fails with InEmergency
+    assert_eq!(
+        client.try_draw_winner(&admin, &100),
+        Err(Ok(Error::InEmergency))
+    );
+
+    // join and deposit fail with InEmergency
+    let alice = Address::generate(&env);
+    assert_eq!(client.try_join(&alice), Err(Ok(Error::InEmergency)));
+}
+
+/// Emergency withdraw distributes available assets pro-rata on partial loss.
+#[test]
+fn emergency_withdraw_pro_rata_partial_loss() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    let signer2 = Address::generate(&env);
+    client.seed_admin(&admin, &signer2);
+
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    client.join(&alice);
+    client.join(&bob);
+
+    client.deposit(&alice, &600);
+    client.deposit(&bob, &400);
+    assert_eq!(client.pool().total_deposited, 1_000);
+
+    // Trigger emergency with 500 assets (50% loss)
+    let pid = client.propose(&admin, &ProposalAction::TriggerEmergency(500));
+    client.approve(&signer2, &pid);
+
+    assert!(client.is_emergency());
+
+    // Alice has 600/1000 = 60%, gets 600 * 500 / 1000 = 300
+    let alice_payout = client.emergency_withdraw(&alice);
+    assert_eq!(alice_payout, 300);
+
+    // Bob has 400 remaining out of 400 total_deposited, 200 emergency_assets, gets 200
+    let bob_payout = client.emergency_withdraw(&bob);
+    assert_eq!(bob_payout, 200);
+
+    assert_eq!(client.pool().total_deposited, 0);
+    assert_eq!(client.emergency_assets(), 0);
+}
+
+/// Emergency withdraw returns 0 on total strategy failure (0 emergency assets).
+#[test]
+fn emergency_withdraw_total_strategy_failure() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    let signer2 = Address::generate(&env);
+    client.seed_admin(&admin, &signer2);
+
+    let alice = Address::generate(&env);
+    client.join(&alice);
+    client.deposit(&alice, &1_000);
+
+    // Trigger emergency with 0 assets
+    let pid = client.propose(&admin, &ProposalAction::TriggerEmergency(0));
+    client.approve(&signer2, &pid);
+
+    let payout = client.emergency_withdraw(&alice);
+    assert_eq!(payout, 0);
+    assert_eq!(client.pool().total_deposited, 0);
+}
+
+/// Recapitalization and return to normal mode via governance.
+#[test]
+fn recapitalization_and_resume_normal() {
+    let (env, client, admin) = setup();
+    client.create(&admin);
+    let signer2 = Address::generate(&env);
+    client.seed_admin(&admin, &signer2);
+
+    let alice = Address::generate(&env);
+    client.join(&alice);
+    client.deposit(&alice, &1_000);
+
+    // Trigger emergency with 400 assets
+    let pid1 = client.propose(&admin, &ProposalAction::TriggerEmergency(400));
+    client.approve(&signer2, &pid1);
+
+    // Try ResumeNormal before recapitalization -> fails with Insolvent at propose time
+    assert_eq!(
+        client.try_propose(&admin, &ProposalAction::ResumeNormal),
+        Err(Ok(Error::Insolvent))
+    );
+
+    // Recapitalize by 600
+    let pid2 = client.propose(&admin, &ProposalAction::Recapitalize(600));
+    client.approve(&signer2, &pid2);
+
+    assert_eq!(client.emergency_assets(), 1_000);
+
+    // Resume normal mode
+    let pid3 = client.propose(&admin, &ProposalAction::ResumeNormal);
+    client.approve(&signer2, &pid3);
+
+    assert!(!client.is_emergency());
+}

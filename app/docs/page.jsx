@@ -17,7 +17,7 @@ export default function ProtocolDocsPage() {
       </div>
 
       <div className="space-y-16">
-        <section className="space-y-6">
+        <section id="product-overview" className="scroll-mt-24 space-y-6">
           <h2 className="flex items-center gap-2 text-2xl font-semibold text-vault-text">
             <Shield className="text-vault-accent" /> Product Overview
           </h2>
@@ -36,7 +36,7 @@ export default function ProtocolDocsPage() {
           </div>
         </section>
 
-        <section className="space-y-6">
+        <section id="round-lifecycle" className="scroll-mt-24 space-y-6">
           <h2 className="flex items-center gap-2 text-2xl font-semibold text-vault-text">
             <RefreshCw className="text-vault-accent" /> Round Lifecycle
           </h2>
@@ -47,7 +47,7 @@ export default function ProtocolDocsPage() {
             <ol className="list-decimal pl-6 space-y-2">
               <li>The total yield generated across all strategies is calculated.</li>
               <li>A verifiable random function (VRF) is used to select winners based on their deposit size and duration (time-weighted balance).</li>
-              <li>Prizes are distributed to the winners' wallets or added to their vault balances.</li>
+              <li>Prizes are distributed to the winners&apos; wallets or added to their vault balances.</li>
               <li>A new round begins immediately.</li>
             </ol>
           </div>

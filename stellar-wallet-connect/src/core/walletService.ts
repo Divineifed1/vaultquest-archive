@@ -5,11 +5,13 @@ import { resolveHorizonUrl } from "./horizonConfig.js";
 import type { ISupportedWallet } from "@creit.tech/stellar-wallets-kit";
 import {
   EXPECTED_NETWORK,
+  STELLAR_NETWORKS,
   type NetworkType,
   type WalletType,
   normalizeStellarNetwork,
 } from "../lib/wallets.js";
 import { HorizonPool } from "./horizonPool.js";
+import { vaultQueryClient } from "../vault/data/queryClient.js";
 
 export interface WalletConnectionResult {
   address: string;
@@ -91,8 +93,14 @@ function setConnection(publicKey: string, provider: string): void {
     throw new Error(`Unsupported Stellar wallet provider: ${provider}`);
   }
 
+  const previousPublicKey = connectionState.publicKey;
+
   connectionState.publicKey = publicKey;
   connectionState.provider = appProvider;
+
+  if (previousPublicKey && previousPublicKey !== publicKey) {
+    resetUserScopedState();
+  }
 
   if (typeof localStorage !== "undefined") {
     localStorage.setItem("publicKey", publicKey);
@@ -120,6 +128,8 @@ function disconnect(): void {
     localStorage.removeItem("walletProvider");
   }
 
+  resetUserScopedState();
+
   connectedPublicKey.set("");
   connectedNetwork.set(null);
   isNetworkMismatch.set(false);
@@ -128,6 +138,13 @@ function disconnect(): void {
 export async function checkAndNotifyFunding(): Promise<void> {
   // The product flow no longer opens the wallet funding modal automatically.
   return;
+}
+
+function resetUserScopedState(): void {
+  vaultQueryClient.clear();
+  if (typeof localStorage !== "undefined") {
+    localStorage.removeItem("vaultquest_pending_tx_state");
+  }
 }
 
 async function getWalletAvailability(provider: WalletType): Promise<{

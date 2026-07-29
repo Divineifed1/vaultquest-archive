@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo } from "react";
 import { useAccount } from "wagmi";
 import { User, Save, Award, Sparkles, Check, Settings, Shield, Bell, Lock } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
+import { useToast } from "@/hooks/useToast";
 
 const TABS = [
   { id: "general", label: "General", icon: User },
@@ -13,6 +14,7 @@ const TABS = [
 
 export default function ProfileEditor() {
   const { address } = useAccount();
+  const { addToast } = useToast();
   const [activeTab, setActiveTab] = useState("general");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -43,6 +45,9 @@ export default function ProfileEditor() {
       if (formData.newPassword !== formData.confirmPassword) newErrors.confirmPassword = "Passwords do not match";
     }
     setErrors(newErrors);
+    if (Object.keys(newErrors).length > 0) {
+      addToast({ type: "error", message: "Please fix the errors before saving." });
+    }
     return Object.keys(newErrors).length === 0;
   };
 
@@ -53,6 +58,7 @@ export default function ProfileEditor() {
     await new Promise((resolve) => setTimeout(resolve, 1000));
     setSaving(false);
     setSaved(true);
+    addToast({ type: "success", message: "Profile updated successfully." });
     setTimeout(() => setSaved(false), 2000);
   };
 

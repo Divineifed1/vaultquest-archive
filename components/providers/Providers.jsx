@@ -10,6 +10,8 @@ import { readStoredRpc, RPC_UPDATED_EVENT } from "@/lib/customRpc";
 import { createWagmiConfig } from "@/lib/wagmi";
 import { TransactionToastProvider } from "@/hooks/useTransactionToast";
 
+import { ToastProvider } from "@/components/providers/ToastProvider";
+
 export default function Providers({ children }) {
   const [queryClient] = useState(
     () =>
@@ -41,7 +43,9 @@ export default function Providers({ children }) {
       <WagmiProvider key={configVersion} config={wagmiConfig}>
         <QueryClientProvider client={queryClient}>
           <RainbowKitProvider>
-            <TransactionToastProvider>{children}</TransactionToastProvider>
+            <TransactionToastProvider>
+              <ToastProvider>{children}</ToastProvider>
+            </TransactionToastProvider>
           </RainbowKitProvider>
         </QueryClientProvider>
       </WagmiProvider>

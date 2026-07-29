@@ -57,6 +57,54 @@ describe("QuestService", () => {
     expect(metrics.depositCount).toBe(0);
   });
 
+  // #504 — totalDeposited previously used a raw SQL float8 cast, which
+  // silently truncated fractional amounts and had no floor on malformed
+  // values. It's now bigint-backed via Amount and rejects bad payloads
+  // instead of coercing them to 0 or truncating them.
+  it("excludes deposits with a fractional amount from totalDeposited but still counts them toward depositCount/distinctPools", async () => {
+    await seedAction(db.prisma, {
+      walletAddress: WALLET, status: "confirmed",
+      actionPayload: { vault_id: "pool-a", amount: "40.5" }
+    });
+    await seedAction(db.prisma, {
+      walletAddress: WALLET, status: "confirmed",
+      actionPayload: { vault_id: "pool-b", amount: "20" }
+    });
+
+    const metrics = await svc.computeMetrics(WALLET);
+    expect(metrics.totalDeposited).toBe(20); // only the valid deposit counts toward the dollar total
+    expect(metrics.depositCount).toBe(2); // both deposits still happened
+    expect(metrics.distinctPools).toBe(2);
+  });
+
+  it("excludes a deposit with a malformed (non-numeric) amount from totalDeposited", async () => {
+    await seedAction(db.prisma, {
+      walletAddress: WALLET, status: "confirmed",
+      actionPayload: { vault_id: "pool-a", amount: "not-a-number" }
+    });
+
+    const metrics = await svc.computeMetrics(WALLET);
+    expect(metrics.totalDeposited).toBe(0);
+    expect(metrics.depositCount).toBe(1);
+  });
+
+  it("handles amounts beyond Number.MAX_SAFE_INTEGER without precision loss", async () => {
+    // 2^53 - 1 = 9007199254740991; go well past it.
+    await seedAction(db.prisma, {
+      walletAddress: WALLET, status: "confirmed",
+      actionPayload: { vault_id: "pool-a", amount: "9007199254740993" }
+    });
+    await seedAction(db.prisma, {
+      walletAddress: WALLET, status: "confirmed",
+      actionPayload: { vault_id: "pool-a", amount: "7" }
+    });
+
+    const metrics = await svc.computeMetrics(WALLET);
+    // A float8 sum of these two values would lose the low-order digits;
+    // bigint addition must not.
+    expect(metrics.totalDeposited).toBe(9007199254741000);
+  });
+
   it("marks a quest completed and stamps completedAt once", async () => {
     await seedAction(db.prisma, {
       walletAddress: WALLET, status: "confirmed",

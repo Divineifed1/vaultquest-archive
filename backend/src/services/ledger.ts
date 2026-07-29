@@ -4,6 +4,21 @@ import { ERROR_CODES, canTransition, ActionStatus } from "../constants.js";
 import { AppError } from "../errors.js";
 import type { IntentInput, ActionRecord } from "../types.js";
 import type { CacheService } from "./cacheService.js";
+import { Amount, InvalidAmountError } from "../amount.js";
+
+// #504 — getPortfolioSummary previously read payload.token/asset with a
+// hardcoded "USDC" fallback whenever it was missing. Today there is
+// exactly one canonical, single-asset pool per deployment (see #507
+// findings), so a single configured default is still correct — but it's
+// now explicit and named, not an inline magic string repeated at each
+// call site. Decimals is 0 (not 7) because every existing caller/test
+// (tests/portfolio.spec.ts, tests/portfolio-unit.spec.ts) treats
+// payload.amount as an already-whole-unit integer (e.g. "100" -> 100),
+// matching this endpoint's existing external contract — this is purely
+// an internal-precision fix (bigint accumulation instead of float), not
+// a change to what unit amounts are expressed in.
+const DEFAULT_POOL_ASSET_CODE = "USDC";
+const DEFAULT_POOL_ASSET_DECIMALS = 0;
 
 export type ListActionsParams = {
   walletAddress: string;
@@ -505,39 +520,77 @@ export class LedgerService {
       orderBy: { createdAt: "desc" }
     });
 
-    const poolBalances: Record<string, { balance: number; token: string }> = {};
-    let totalClaimed = 0;
+    // #504 — balances are accumulated per (vaultId, assetCode) using
+    // bigint Amount arithmetic, never plain floats. A pool whose payloads
+    // report an asset that doesn't match its own running balance's asset
+    // is a genuine data inconsistency (two different assets claiming the
+    // same vaultId) rather than something to silently add together, so
+    // it's surfaced via invalidActionCount instead of merged.
+    const poolBalances: Record<string, { balance: Amount; token: string }> = {};
+    let totalClaimed: Amount | null = null;
+    let invalidActionCount = 0;
 
     const confirmedActions = actions.filter((a) => a.status === "confirmed");
     for (const action of confirmedActions) {
-      const payload = action.actionPayload as Record<string, any> | null;
+      const payload = action.actionPayload as Record<string, unknown> | null;
       if (!payload) continue;
 
-      const vaultId = String(payload.vault_id || payload.pool_id || "default");
-      const amount = Number(payload.amount || 0);
-      const token = String(payload.token || payload.asset || "USDC");
+      const vaultId = String(payload.vault_id ?? payload.pool_id ?? "default");
+      const token = String(payload.token ?? payload.asset ?? DEFAULT_POOL_ASSET_CODE);
+
+      let amount: Amount;
+      try {
+        amount = Amount.fromPayload(payload, token, DEFAULT_POOL_ASSET_DECIMALS);
+      } catch (err) {
+        if (err instanceof InvalidAmountError) {
+          invalidActionCount++;
+          continue;
+        }
+        throw err;
+      }
 
       if (!poolBalances[vaultId]) {
-        poolBalances[vaultId] = { balance: 0, token };
+        poolBalances[vaultId] = { balance: Amount.zero(token, DEFAULT_POOL_ASSET_DECIMALS), token };
+      } else if (poolBalances[vaultId].token !== token) {
+        // Same vaultId reporting two different asset codes across actions —
+        // a data inconsistency, not something to combine. Skip rather than
+        // silently mixing units into one balance.
+        invalidActionCount++;
+        continue;
       }
 
       if (action.actionType === "deposit") {
-        poolBalances[vaultId].balance += amount;
+        poolBalances[vaultId].balance = poolBalances[vaultId].balance.add(amount);
       } else if (action.actionType === "withdraw") {
-        poolBalances[vaultId].balance -= amount;
+        poolBalances[vaultId].balance = poolBalances[vaultId].balance.subtract(amount);
       } else if (action.actionType === "claim") {
-        totalClaimed += amount;
+        totalClaimed = totalClaimed ? totalClaimed.add(amount) : amount;
       }
     }
 
-    let totalDeposits = 0;
+    let totalDeposits: Amount | null = null;
     const activePositions = Object.entries(poolBalances)
-      .filter(([_, data]) => data.balance > 0)
+      .filter(([, data]) => data.balance.isPositive())
       .map(([vaultId, data]) => {
-        totalDeposits += data.balance;
+        // Only combine into the grand total when the asset matches every
+        // other position seen so far — otherwise leave totalDeposits as
+        // whichever single asset started the accumulation and surface the
+        // mismatch, rather than silently summing incompatible units.
+        if (!totalDeposits) {
+          totalDeposits = data.balance;
+        } else if (totalDeposits.assetCode === data.balance.assetCode) {
+          totalDeposits = totalDeposits.add(data.balance);
+        } else {
+          invalidActionCount++;
+        }
         return {
           vault_id: vaultId,
-          balance: data.balance,
+          // Converted back to Number at the response boundary to preserve
+          // this endpoint's existing external contract (tests assert
+          // plain numbers here) — the accumulation above happens entirely
+          // in bigint, so this conversion can't itself reintroduce the
+          // precision loss the float-based code had.
+          balance: Number(data.balance.raw),
           token: data.token
         };
       });
@@ -553,10 +606,11 @@ export class LedgerService {
 
     return {
       wallet_address: walletAddress,
-      total_deposits: totalDeposits,
+      total_deposits: Number((totalDeposits ?? Amount.zero(DEFAULT_POOL_ASSET_CODE, DEFAULT_POOL_ASSET_DECIMALS)).raw),
       active_positions: activePositions,
       pending_rewards: 0,
-      claimable_amount: totalClaimed,
+      claimable_amount: Number((totalClaimed ?? Amount.zero(DEFAULT_POOL_ASSET_CODE, DEFAULT_POOL_ASSET_DECIMALS)).raw),
+      invalid_action_count: invalidActionCount,
       recent_activity: recentActivity
     };
   }

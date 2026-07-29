@@ -7,6 +7,19 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+model User {
+  id            String   @id @default(uuid()) @db.Uuid
+  walletAddress String?  @unique @map("wallet_address")
+  email         String?  @unique
+  name          String?
+  bio           String?
+  passwordHash  String?  @map("password_hash")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@map("users")
+}
+
 enum ActionType {
   deposit
   withdraw

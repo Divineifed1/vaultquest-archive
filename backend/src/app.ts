@@ -7,6 +7,7 @@ import { actionsRoutes } from "./routes/actions.js";
 import { savedPoolsRoutes } from "./routes/savedPools.js";
 import { internalRoutes } from "./routes/internal.js";
 import { metricsRoutes } from "./routes/metrics.js";
+import { usersRoutes } from "./routes/users.js";
 import { MetricsService } from "./services/metricsService.js";
 import { ok } from "./responses.js";
 import { errorHandler } from "./middleware/errorHandler.js";
@@ -75,6 +76,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   app.register(savedPoolsRoutes(savedPoolsSvc));
   app.register(internalRoutes(svc, deps.internalSecret));
   app.register(metricsRoutes(metricsSvc));
+  app.register(usersRoutes, { prefix: "/api/users", prisma: deps.prisma });
 
   // Central Error Handler Middleware
   app.setErrorHandler(errorHandler);

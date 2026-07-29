@@ -138,7 +138,8 @@ if (env.BACKUP_DIR) {
     databaseUrl: env.DATABASE_URL,
     retainDays: env.BACKUP_RETAIN_DAYS,
     schedule: env.BACKUP_SCHEDULE,
-    logger
+    logger,
+    prisma
   });
   logger.info(
     { backupDir: env.BACKUP_DIR, schedule: env.BACKUP_SCHEDULE },

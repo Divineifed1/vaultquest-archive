@@ -85,6 +85,24 @@ model ActionLease {
   @@map("action_leases")
 }
 
+// #506 — generic named-job distributed lease with a fencing token, for
+// coordinating cron/indexer/reconciler workers across replicas. Same CAS
+// (compare-and-swap) shape as ActionLease above, but keyed by a stable
+// jobName instead of a per-action id, and carries a fencingToken that
+// increments on every successful acquisition (including takeovers) so
+// writes guarded by a lease can detect and reject a stale holder that
+// resumed after its lease already expired and was taken over.
+model JobLease {
+  jobName      String   @id @map("job_name")
+  workerId     String   @map("worker_id")
+  fencingToken BigInt   @default(1) @map("fencing_token")
+  acquiredAt   DateTime @default(now()) @map("acquired_at")
+  expiresAt    DateTime @map("expires_at")
+
+  @@index([expiresAt])
+  @@map("job_leases")
+}
+
 model IndexerCheckpoint {
   id                  String   @id @default("singleton")
   latestLedger        Int      @map("latest_ledger")

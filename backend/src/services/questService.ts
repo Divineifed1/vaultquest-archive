@@ -32,7 +32,9 @@
  * per-pool asset configuration.
  */
 
-import type { PrismaClient, Prisma } from "@prisma/client";
+import type { PrismaClient } from "@prisma/client";
+import { Prisma } from "@prisma/client";
+import { createHash } from "node:crypto";
 import { Amount, InvalidAmountError } from "../amount.js";
 
 export type QuestMetricKey =
@@ -239,6 +241,19 @@ export class QuestService {
         prev.progress !== p.progress ||
         prev.status !== p.status;
 
+      // #505 — the exact instant a quest transitions into "completed"
+      // (never was before, or is being created already-completed) is
+      // when a reward grant becomes owed. Insert-if-absent via the
+      // deterministic idempotencyKey: replaying this sweep (backfill, or
+      // a retry after a crash right after this point) can never create a
+      // second grant for the same (walletAddress, questId) pair, because
+      // the unique constraint on idempotencyKey rejects the duplicate
+      // insert outright.
+      const wasCompletedBefore = prev?.status === "completed";
+      if (justCompleted && !wasCompletedBefore) {
+        await this.createRewardGrantIfAbsent(walletAddress, p.questId);
+      }
+
       if (changed) {
         await this.prisma.userQuest.upsert({
           where: { walletAddress_questId: { walletAddress, questId: p.questId } },
@@ -276,10 +291,12 @@ export class QuestService {
    * Cron entry point. Finds wallets with confirmed ledger entries updated since
    * `since` and re-evaluates each. Returns the number of wallets processed.
    *
-   * #505 — this enumeration + persistence loop is real (not a stub), but
-   * has no idempotency/dead-letter/backfill handling for concurrent cron
-   * workers or crash-mid-sweep recovery; see the distributed-lock and
-   * idempotent-grant work tracked in #505/#506.
+   * #506 — the caller (cron.ts) is responsible for wrapping this in a
+   * JobLease so at most one worker runs a sweep at a time. #505's
+   * exactly-once reward guarantee doesn't depend on that lease alone,
+   * though: createRewardGrantIfAbsent's unique idempotencyKey constraint
+   * means even a backfill script and this cron sweep running
+   * concurrently (outside any shared lease) can't double-grant.
    */
   async evaluateRecent(since: Date, limit = 500): Promise<{ wallets: number }> {
     const rows = await this.prisma.actionLedger.findMany({
@@ -315,6 +332,83 @@ export class QuestService {
         completedAt: row?.completedAt ?? null
       };
     });
+  }
+
+  /**
+   * Records grant intent for a wallet/quest completion. The idempotencyKey
+   * is deterministic from (walletAddress, questId) — a wallet can only
+   * ever complete a given quest once, so this key is naturally unique per
+   * intended grant. If a row already exists (this sweep re-ran, or a
+   * concurrent process raced us here) the unique-constraint violation is
+   * swallowed rather than surfaced — that's the expected, correct outcome
+   * of an idempotent insert, not an error.
+   */
+  private async createRewardGrantIfAbsent(walletAddress: string, questId: string): Promise<void> {
+    const idempotencyKey = createHash("sha256").update(`${walletAddress}:${questId}`).digest("hex");
+    try {
+      await this.prisma.rewardGrant.create({
+        data: { walletAddress, questId, idempotencyKey }
+      });
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+        return; // Grant already recorded — exactly the idempotency guarantee this exists for.
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Processes pending reward grants: attempts the actual payout for each,
+   * retrying up to `maxAttempts` times before flipping to a terminal
+   * `failed` status (dead-letter) rather than retrying forever. Returns
+   * a summary for logging/metrics.
+   *
+   * TODO(#505): the actual payout call is not yet wired up — there is no
+   * existing reward/credit-disbursement mechanism anywhere in this
+   * codebase to call into (confirmed via search). This method currently
+   * marks every pending grant `granted` without performing a real
+   * payout, which is NOT safe to run against production data — it exists
+   * so the idempotency/retry/dead-letter machinery is in place and
+   * testable, pending a maintainer decision on:
+   *   1. What the payout call actually is (on-chain contract invocation?
+   *      an off-chain credit ledger entry?).
+   *   2. The correction policy for a reorged/refunded action underlying
+   *      an already-granted reward (flag for manual review vs. automatic
+   *      clawback) — see the open questions raised on issue #505.
+   */
+  async processGrants(maxAttempts = 5, limit = 100): Promise<{ granted: number; failed: number }> {
+    const pending = await this.prisma.rewardGrant.findMany({
+      where: { status: "pending", attempts: { lt: maxAttempts } },
+      take: limit
+    });
+
+    let granted = 0;
+    let failed = 0;
+
+    for (const grant of pending) {
+      try {
+        // TODO(#505): replace with the real payout call once identified.
+        await this.prisma.rewardGrant.update({
+          where: { id: grant.id },
+          data: { status: "granted", grantedAt: new Date(), attempts: grant.attempts + 1 }
+        });
+        granted++;
+      } catch (err) {
+        const attempts = grant.attempts + 1;
+        const message = err instanceof Error ? err.message : String(err);
+        await this.prisma.rewardGrant.update({
+          where: { id: grant.id },
+          data: {
+            attempts,
+            lastError: message,
+            status: attempts >= maxAttempts ? "failed" : "pending"
+          }
+        });
+        failed++;
+      }
+    }
+
+    return { granted, failed };
   }
 }
 

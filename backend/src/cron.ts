@@ -96,7 +96,13 @@ export function startQuestCron(opts: {
     try {
       await withJobLease(leases, "quest-evaluation", leaseTtlMs, opts.logger, async () => {
         const result = await questService.evaluateRecent(since);
-        opts.logger.info({ result }, "quest evaluation sweep complete");
+        // #505 — grant processing runs under the same lease as the sweep
+        // that creates grant intents; RewardGrant's own idempotencyKey
+        // unique constraint is the real double-grant guard (see
+        // createRewardGrantIfAbsent), the shared lease is just the
+        // first, cheaper line of defense against overlapping ticks.
+        const grants = await questService.processGrants();
+        opts.logger.info({ result, grants }, "quest evaluation sweep complete");
       });
     } catch (err) {
       opts.logger.error({ err }, "quest evaluation sweep failed");

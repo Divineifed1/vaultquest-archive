@@ -1,6 +1,6 @@
 import { buildApp } from "./app.js";
 import { getEnv } from "./env.js";
-import { getPrisma } from "./db.js";
+import { getPrisma, pingDatabase } from "./db.js";
 import { createLogger } from "./logger.js";
 import {
   startReconcilerCron,
@@ -163,10 +163,15 @@ async function shutdown(signal: string) {
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 
-app
-  .listen({ port: env.PORT, host: "0.0.0.0" })
-  .then((addr) => logger.info({ addr }, "listening"))
-  .catch((err) => {
-    logger.error({ err }, "failed to start");
+pingDatabase(prisma).then((isConnected) => {
+  if (!isConnected) {
+    logger.error("failed to connect to database on startup. shutting down.");
     process.exit(1);
-  });
+  }
+  return app.listen({ port: env.PORT, host: "0.0.0.0" });
+}).then((addr) => {
+  if (addr) logger.info({ addr }, "listening");
+}).catch((err) => {
+  logger.error({ err }, "failed to start");
+  process.exit(1);
+});

@@ -410,6 +410,69 @@ export class LedgerService {
     });
   }
 
+  /**
+   * Upserts a `PoolRegistry` row from a decoded vault-factory `pool`/
+   * `deployed` event (#507). Keyed on `poolAddress` (unique, and derived
+   * deterministically from (factoryAddress, salt) on-chain, so a replayed
+   * or re-fetched event for the same pool is a no-op update rather than a
+   * duplicate row) — the same idempotency guarantee `reconcileEvent` gives
+   * action-ledger rows, applied here for registry entries instead.
+   */
+  async upsertPoolRegistryEntry(input: {
+    salt: string;
+    poolAddress: string;
+    factoryAddress: string;
+    admin: string;
+    asset: string;
+    wasmHash: string;
+    deployedLedger: number;
+  }): Promise<void> {
+    await this.prisma.poolRegistry.upsert({
+      where: { poolAddress: input.poolAddress },
+      create: {
+        salt: input.salt,
+        poolAddress: input.poolAddress,
+        factoryAddress: input.factoryAddress,
+        admin: input.admin,
+        asset: input.asset,
+        wasmHash: input.wasmHash,
+        deployedLedger: input.deployedLedger
+      },
+      update: {
+        admin: input.admin,
+        asset: input.asset,
+        wasmHash: input.wasmHash
+      }
+    });
+  }
+
+  /**
+   * Marks a registry entry inactive (mirrors the factory's own
+   * `deactivate_pool` — never touches the deployed pool contract itself,
+   * see vault-factory/src/lib.rs's doc comment on that method).
+   */
+  async deactivatePoolRegistryEntry(salt: string): Promise<void> {
+    await this.prisma.poolRegistry.updateMany({
+      where: { salt },
+      data: { active: false }
+    });
+  }
+
+  /**
+   * Active pool contract addresses known to the registry — an additional
+   * indexer contract-id source layered on top of the static
+   * `INDEXER_CONTRACT_IDS` env var (kept as a fallback so existing
+   * single-pool deployments keep working unchanged; see the #507 design
+   * proposal).
+   */
+  async getActivePoolAddresses(): Promise<string[]> {
+    const rows = await this.prisma.poolRegistry.findMany({
+      where: { active: true },
+      select: { poolAddress: true }
+    });
+    return rows.map((r: { poolAddress: string }) => r.poolAddress);
+  }
+
   async findByIdempotencyKey(key: string): Promise<ActionRecord | null> {
     const row = await this.prisma.actionLedger.findUnique({ where: { idempotencyKey: key } });
     return (row as unknown as ActionRecord) ?? null;

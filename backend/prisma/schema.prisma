@@ -195,6 +195,30 @@ model RewardGrant {
   @@map("reward_grants")
 }
 
+// Off-chain mirror of the vault-factory contract's on-chain pool registry
+// (#507). `salt` is the deterministic pool id used as the factory's deploy
+// salt; `poolAddress` is derived from (factory address, salt) so it never
+// changes for a given salt. Populated by the indexer from `pool`/`deployed`
+// events and used to feed `INDEXER_CONTRACT_IDS`-style contract discovery
+// without requiring a manual env var update per new pool.
+model PoolRegistry {
+  id             String    @id @default(uuid()) @db.Uuid
+  salt           String    @unique @map("salt")
+  poolAddress    String    @unique @map("pool_address")
+  factoryAddress String    @map("factory_address")
+  admin          String
+  asset          String
+  wasmHash       String    @map("wasm_hash")
+  active         Boolean   @default(true)
+  deployedLedger Int       @map("deployed_ledger")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  @@index([factoryAddress])
+  @@index([active])
+  @@map("pool_registry")
+}
+
 model RepairAudit {
   id          String   @id @default(uuid()) @db.Uuid
   planJson    Json     @map("plan_json")

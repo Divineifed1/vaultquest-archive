@@ -336,6 +336,16 @@ impl DripPool {
 
         Ok(())
     }
+    // Atomic helper that performs a token transfer and then runs a closure to update accounting.
+    fn atomic_transfer_and<F>(env: &Env, from: &Address, to: &Address, amount: i128, accounting_update: F) -> Result<(), Error>
+    where
+        F: FnOnce() -> Result<(), Error>,
+    {
+        // Perform token transfer first.
+        Self::transfer_tokens(env, from, to, &amount)?;
+        // Apply accounting changes.
+        accounting_update()
+    }
 
     // ── Initialise ─────────────────────────────────────────────────────────
     pub fn create(env: Env, admin: Address) -> Result<(), Error> {
@@ -557,7 +567,7 @@ impl DripPool {
                 }
                 env.storage().instance().set(&DataKey::Admins, &new_admins);
             }
-            ProposalAction::ReleaseEscrow(_recipient, amount) => {
+            ProposalAction::ReleaseEscrow(recipient, amount) => {
                 let mut pool: Pool = env
                     .storage()
                     .instance()
@@ -567,8 +577,21 @@ impl DripPool {
                 if amount > pool.total_deposited {
                     return Err(Error::InvalidAction);
                 }
-                pool.total_deposited = pool.total_deposited.saturating_sub(amount);
-                env.storage().instance().set(&DataKey::Pool, &pool);
+                // Perform atomic token transfer from contract to the bound recipient.
+                let contract_addr = env.current_contract_address();
+                Self::atomic_transfer_and(
+                    &env,
+                    &contract_addr,
+                    &recipient,
+                    amount,
+                    || {
+                        // Update free-reserve bucket only (total_deposited reflects locked principal).
+                        // We decrement total_deposited to reflect the escrow payout.
+                        pool.total_deposited = pool.total_deposited.saturating_sub(amount);
+                        env.storage().instance().set(&DataKey::Pool, &pool);
+                        Ok(())
+                    },
+                )?;
             }
             ProposalAction::SetThreshold(t) => {
                 let admins = Self::get_admins(env);
@@ -595,17 +618,28 @@ impl DripPool {
                 if amount <= 0 {
                     return Err(Error::InvalidAmount);
                 }
-                let mut pool: Pool = env
-                    .storage()
-                    .instance()
-                    .get(&DataKey::Pool)
-                    .ok_or(Error::NotInitialized)?;
-                pool.emergency_assets = pool.emergency_assets.saturating_add(amount);
-                env.storage().instance().set(&DataKey::Pool, &pool);
-                env.events().publish(
-                    (symbol_short!("emergency"), symbol_short!("recap")),
+                // Transfer tokens from the caller (funder) into the contract.
+                let contract_addr = env.current_contract_address();
+                Self::atomic_transfer_and(
+                    &env,
+                    &caller,
+                    &contract_addr,
                     amount,
-                );
+                    || {
+                        let mut pool: Pool = env
+                            .storage()
+                            .instance()
+                            .get(&DataKey::Pool)
+                            .ok_or(Error::NotInitialized)?;
+                        pool.emergency_assets = pool.emergency_assets.saturating_add(amount);
+                        env.storage().instance().set(&DataKey::Pool, &pool);
+                        env.events().publish(
+                            (symbol_short!("emergency"), symbol_short!("recap")),
+                            amount,
+                        );
+                        Ok(())
+                    },
+                )?;
             }
             ProposalAction::ResumeNormal => {
                 let mut pool: Pool = env
@@ -976,18 +1010,22 @@ impl DripPool {
         if amount <= 0 {
             return Err(Error::InvalidAmount);
         }
-        let mut pool: Pool = env
-            .storage()
-            .instance()
-            .get(&DataKey::Pool)
-            .ok_or(Error::NotInitialized)?;
-        if pool.is_emergency {
-            return Err(Error::InEmergency);
-        }
-        pool.distributable_yield += amount;
-        env.storage().instance().set(&DataKey::Pool, &pool);
-        Self::bump_instance(&env);
-        Ok(())
+        // Transfer tokens from caller to this contract, then update accounting atomically.
+        let self_addr = env.current_contract_address();
+        Self::atomic_transfer_and(&env, &caller, &self_addr, amount, || {
+            let mut pool: Pool = env
+                .storage()
+                .instance()
+                .get(&DataKey::Pool)
+                .ok_or(Error::NotInitialized)?;
+            if pool.is_emergency {
+                return Err(Error::InEmergency);
+            }
+            pool.distributable_yield += amount;
+            env.storage().instance().set(&DataKey::Pool, &pool);
+            Self::bump_instance(&env);
+            Ok(())
+        })
     }
 
     /// Admin credits yield from the distributable pool to a specific participant.

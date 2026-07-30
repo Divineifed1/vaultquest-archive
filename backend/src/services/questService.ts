@@ -249,37 +249,52 @@ export class QuestService {
       // second grant for the same (walletAddress, questId) pair, because
       // the unique constraint on idempotencyKey rejects the duplicate
       // insert outright.
+      //
+      // The grant-intent insert and the UserQuest write are wrapped in a
+      // single prisma.$transaction — previously these were two
+      // independent sequential awaits, so a crash between them could
+      // leave a RewardGrant recorded with UserQuest still showing
+      // in_progress (or vice versa on a future refactor), an
+      // inconsistency the #505 design proposal flagged as a gap worth
+      // closing. Wrapping both writes atomically means either both land
+      // or neither does — a retry after a crash mid-transaction re-does
+      // the same work, and the idempotencyKey unique constraint still
+      // guards against a duplicate grant on that retry.
       const wasCompletedBefore = prev?.status === "completed";
-      if (justCompleted && !wasCompletedBefore) {
-        await this.createRewardGrantIfAbsent(walletAddress, p.questId);
-      }
+      const shouldGrant = justCompleted && !wasCompletedBefore;
 
-      if (changed) {
-        await this.prisma.userQuest.upsert({
-          where: { walletAddress_questId: { walletAddress, questId: p.questId } },
-          create: {
-            walletAddress,
-            questId: p.questId,
-            progress: p.progress,
-            target: p.target,
-            status: p.status,
-            completedAt,
-            lastEvaluatedAt: now
-          },
-          update: {
-            progress: p.progress,
-            target: p.target,
-            status: p.status,
-            completedAt,
-            lastEvaluatedAt: now
-          }
-        });
-      } else {
-        await this.prisma.userQuest.update({
-          where: { walletAddress_questId: { walletAddress, questId: p.questId } },
-          data: { lastEvaluatedAt: now }
-        });
-      }
+      await this.prisma.$transaction(async (tx) => {
+        if (shouldGrant) {
+          await this.createRewardGrantIfAbsent(tx, walletAddress, p.questId);
+        }
+
+        if (changed) {
+          await tx.userQuest.upsert({
+            where: { walletAddress_questId: { walletAddress, questId: p.questId } },
+            create: {
+              walletAddress,
+              questId: p.questId,
+              progress: p.progress,
+              target: p.target,
+              status: p.status,
+              completedAt,
+              lastEvaluatedAt: now
+            },
+            update: {
+              progress: p.progress,
+              target: p.target,
+              status: p.status,
+              completedAt,
+              lastEvaluatedAt: now
+            }
+          });
+        } else {
+          await tx.userQuest.update({
+            where: { walletAddress_questId: { walletAddress, questId: p.questId } },
+            data: { lastEvaluatedAt: now }
+          });
+        }
+      });
 
       results.push({ ...p, completedAt });
     }
@@ -288,7 +303,7 @@ export class QuestService {
   }
 
   /**
-   * Cron entry point. Finds wallets with confirmed ledger entries updated since
+   * Cron entry point. Finds wallets with ledger entries updated since
    * `since` and re-evaluates each. Returns the number of wallets processed.
    *
    * #506 — the caller (cron.ts) is responsible for wrapping this in a
@@ -297,20 +312,60 @@ export class QuestService {
    * though: createRewardGrantIfAbsent's unique idempotencyKey constraint
    * means even a backfill script and this cron sweep running
    * concurrently (outside any shared lease) can't double-grant.
+   *
+   * #505 — the wallet-selection query intentionally is NOT filtered to
+   * `status: "confirmed"` only. A reorg/refund transitions a previously
+   * "confirmed" action to "reverted", which also bumps that row's
+   * `updatedAt` — if this query only matched `status: "confirmed"`, a
+   * wallet whose sole recent change was a confirmed -> reverted
+   * transition would be silently excluded from the sweep entirely, so
+   * neither its quest progress nor any already-granted reward for it
+   * would ever be re-evaluated or flagged. Any recent status change
+   * (confirmed OR reverted) must trigger re-evaluation.
+   *
+   * A single poison wallet (one whose actions/payload cause evaluateWallet
+   * to throw) does not abort the rest of the batch — it's caught, logged,
+   * and swept up in `poisoned` so the remaining wallets in this tick still
+   * get evaluated.
    */
-  async evaluateRecent(since: Date, limit = 500): Promise<{ wallets: number }> {
+  async evaluateRecent(since: Date, limit = 500): Promise<{ wallets: number; poisoned: number }> {
     const rows = await this.prisma.actionLedger.findMany({
-      where: { status: "confirmed", updatedAt: { gte: since } },
+      where: {
+        status: { in: ["confirmed", "reverted"] },
+        updatedAt: { gte: since }
+      },
       select: { walletAddress: true },
       distinct: ["walletAddress"],
       take: limit
     });
 
-    for (const { walletAddress } of rows) {
-      await this.evaluateWallet(walletAddress);
+    const walletAddresses = rows.map((r) => r.walletAddress);
+    let poisoned = 0;
+
+    for (const walletAddress of walletAddresses) {
+      try {
+        await this.evaluateWallet(walletAddress);
+      } catch (err) {
+        poisoned++;
+        // eslint-disable-next-line no-console -- no injected logger available in this service; surfaced loudly rather than silently dropped.
+        console.error(
+          `[QuestService.evaluateRecent] poison wallet ${walletAddress} failed evaluation, continuing with remaining batch:`,
+          err
+        );
+      }
     }
 
-    return { wallets: rows.length };
+    // #505 correction policy: after re-evaluating, check whether any of
+    // these wallets' recent updates were reorg/refund reversions that
+    // invalidate an already-granted reward.
+    if (walletAddresses.length > 0) {
+      await this.flagGrantsForReorgedActions(walletAddresses).catch((err) => {
+        // eslint-disable-next-line no-console -- see note above.
+        console.error("[QuestService.evaluateRecent] failed to flag grants for reorged actions:", err);
+      });
+    }
+
+    return { wallets: walletAddresses.length, poisoned };
   }
 
   /** Read model for the frontend quest-tracking UI (#26). */
@@ -342,11 +397,20 @@ export class QuestService {
    * concurrent process raced us here) the unique-constraint violation is
    * swallowed rather than surfaced — that's the expected, correct outcome
    * of an idempotent insert, not an error.
+   *
+   * Takes a Prisma client/transaction handle explicitly (rather than
+   * always using `this.prisma`) so callers can run this as part of a
+   * larger `$transaction` alongside the UserQuest write it's paired with
+   * — see evaluateWallet.
    */
-  private async createRewardGrantIfAbsent(walletAddress: string, questId: string): Promise<void> {
+  private async createRewardGrantIfAbsent(
+    db: PrismaClient | Prisma.TransactionClient,
+    walletAddress: string,
+    questId: string
+  ): Promise<void> {
     const idempotencyKey = createHash("sha256").update(`${walletAddress}:${questId}`).digest("hex");
     try {
-      await this.prisma.rewardGrant.create({
+      await db.rewardGrant.create({
         data: { walletAddress, questId, idempotencyKey }
       });
     } catch (err) {
@@ -355,6 +419,58 @@ export class QuestService {
       }
       throw err;
     }
+  }
+
+  /**
+   * #505 correction policy for reorged/refunded actions underlying an
+   * already-granted reward (acceptance criteria: "reorged/refunded
+   * actions trigger a documented correction policy").
+   *
+   * Deliberately conservative — flags for manual review rather than an
+   * automatic clawback. This is a real-money decision the #505 design
+   * proposal explicitly declined to guess at unilaterally (payout
+   * mechanics themselves are still an open question blocking
+   * processGrants' real implementation), but "silently do nothing when a
+   * granted reward's funding action reverts" is not an acceptable
+   * default either — it would let the grant table silently drift from
+   * ledger truth. Flagging is the minimum safe behavior: it surfaces the
+   * inconsistency for a human decision without irreversibly moving funds
+   * based on an automated guess.
+   *
+   * Scans wallets with recently reverted/refunded confirmed actions and
+   * flags any `granted` RewardGrant for that wallet whose quest's metrics
+   * would no longer be met, setting status to `needs_review` (a distinct
+   * terminal-ish status from `failed`, since this isn't a payout failure
+   * — it's a completed payout whose underlying justification changed
+   * after the fact) and recording why in `lastError`.
+   */
+  async flagGrantsForReorgedActions(walletAddresses: string[]): Promise<{ flagged: number }> {
+    let flagged = 0;
+    for (const walletAddress of walletAddresses) {
+      const metrics = await this.computeMetrics(walletAddress);
+      const projected = this.projectProgress(metrics);
+      const stillCompleted = new Set(
+        projected.filter((p) => p.status === "completed").map((p) => p.questId)
+      );
+
+      const grantedRows = await this.prisma.rewardGrant.findMany({
+        where: { walletAddress, status: "granted" }
+      });
+
+      for (const grant of grantedRows) {
+        if (stillCompleted.has(grant.questId)) continue;
+        await this.prisma.rewardGrant.update({
+          where: { id: grant.id },
+          data: {
+            status: "needs_review",
+            lastError:
+              "Underlying action(s) reverted/refunded after this reward was granted; quest no longer meets its target. Flagged for manual review, not auto-clawed-back."
+          }
+        });
+        flagged++;
+      }
+    }
+    return { flagged };
   }
 
   /**

@@ -183,7 +183,7 @@ model RewardGrant {
   walletAddress  String    @map("wallet_address")
   questId        String    @map("quest_id")
   idempotencyKey String    @unique @map("idempotency_key")
-  status         String    @default("pending") // pending | granted | failed
+  status         String    @default("pending") // pending | granted | failed | needs_review
   attempts       Int       @default(0)
   lastError      String?   @map("last_error")
   grantedAt      DateTime? @map("granted_at")

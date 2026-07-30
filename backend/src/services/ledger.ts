@@ -589,6 +589,28 @@ export class LedgerService {
     // is a genuine data inconsistency (two different assets claiming the
     // same vaultId) rather than something to silently add together, so
     // it's surfaced via invalidActionCount instead of merged.
+    //
+    // The vault's canonical asset is established from its EARLIEST
+    // confirmed action, not whichever action happens to be visited first.
+    // `actions` is fetched `orderBy: createdAt desc`, so without this a
+    // late-arriving action (e.g. a spoofed/malformed payload reporting the
+    // wrong token) would silently become the accepted baseline and cause
+    // every earlier, legitimate action for that vault to be flagged as the
+    // mismatch and dropped — inverting the intent of this guard.
+    const vaultCanonicalToken: Record<string, string> = {};
+    const confirmedActionsChronological = actions
+      .filter((a) => a.status === "confirmed")
+      .slice()
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+    for (const action of confirmedActionsChronological) {
+      const payload = action.actionPayload as Record<string, unknown> | null;
+      if (!payload) continue;
+      const vaultId = String(payload.vault_id ?? payload.pool_id ?? "default");
+      if (!(vaultId in vaultCanonicalToken)) {
+        vaultCanonicalToken[vaultId] = String(payload.token ?? payload.asset ?? DEFAULT_POOL_ASSET_CODE);
+      }
+    }
+
     const poolBalances: Record<string, { balance: Amount; token: string }> = {};
     let totalClaimed: Amount | null = null;
     let invalidActionCount = 0;
@@ -600,6 +622,7 @@ export class LedgerService {
 
       const vaultId = String(payload.vault_id ?? payload.pool_id ?? "default");
       const token = String(payload.token ?? payload.asset ?? DEFAULT_POOL_ASSET_CODE);
+      const canonicalToken = vaultCanonicalToken[vaultId] ?? token;
 
       let amount: Amount;
       try {
@@ -612,14 +635,17 @@ export class LedgerService {
         throw err;
       }
 
-      if (!poolBalances[vaultId]) {
-        poolBalances[vaultId] = { balance: Amount.zero(token, DEFAULT_POOL_ASSET_DECIMALS), token };
-      } else if (poolBalances[vaultId].token !== token) {
-        // Same vaultId reporting two different asset codes across actions —
-        // a data inconsistency, not something to combine. Skip rather than
+      if (token !== canonicalToken) {
+        // This action's asset doesn't match the vault's canonical asset
+        // (established from its earliest confirmed action) — a data
+        // inconsistency, not something to combine. Skip rather than
         // silently mixing units into one balance.
         invalidActionCount++;
         continue;
+      }
+
+      if (!poolBalances[vaultId]) {
+        poolBalances[vaultId] = { balance: Amount.zero(canonicalToken, DEFAULT_POOL_ASSET_DECIMALS), token: canonicalToken };
       }
 
       if (action.actionType === "deposit") {

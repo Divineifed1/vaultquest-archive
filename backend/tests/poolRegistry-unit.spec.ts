@@ -143,7 +143,8 @@ describe("StellarIndexer: factory_pool_deployed routing (#507)", () => {
     const indexer = new StellarIndexer({
       ledger,
       source: fakeSource([makeRaw()]),
-      decoder: fakeDecoder(payload)
+      decoder: fakeDecoder(payload),
+      factoryAddress: "CFACTORY"
     });
 
     const result = await indexer.tick();
@@ -169,7 +170,8 @@ describe("StellarIndexer: factory_pool_deployed routing (#507)", () => {
     const indexer = new StellarIndexer({
       ledger,
       source: fakeSource([{ ...makeRaw(), successful: false }]),
-      decoder: fakeDecoder({ type: "fpooldep", salt: Buffer.from([1]), pool_address: "CPOOL1", admin: "G", asset: "G", wasm_hash: Buffer.from([1]) })
+      decoder: fakeDecoder({ type: "fpooldep", salt: Buffer.from([1]), pool_address: "CPOOL1", admin: "G", asset: "G", wasm_hash: Buffer.from([1]) }),
+      factoryAddress: "CFACTORY"
     });
 
     await indexer.tick();
@@ -185,12 +187,74 @@ describe("StellarIndexer: factory_pool_deployed routing (#507)", () => {
       ledger,
       source: fakeSource([makeRaw()]),
       decoder: fakeDecoder({ type: "fpooldep", salt: Buffer.from([1]), pool_address: "CPOOL1", admin: "G", asset: "G", wasm_hash: Buffer.from([1]) }),
-      logger
+      logger,
+      factoryAddress: "CFACTORY"
     });
 
     const result = await indexer.tick();
     expect(logger.warn).toHaveBeenCalled();
     expect(result.cursor).toBe("1");
+  });
+
+  // #507 acceptance criteria: "spoofed pools" must be rejected. An event
+  // whose topic matches fpooldep but was emitted by a contract OTHER than
+  // the configured, trusted vault-factory must never be upserted into the
+  // registry — its payload fields (pool_address/admin/asset/etc.) are
+  // fully attacker-controlled and cannot be trusted just because the
+  // event's topic string looks right.
+  it("rejects (does not upsert) a fpooldep event emitted by a contract that is not the configured factory", async () => {
+    const upsertPoolRegistryEntry = vi.fn(async () => {});
+    const ledger = { upsertPoolRegistryEntry, reconcileEvent: vi.fn() } as any;
+    const logger = { warn: vi.fn(), info: vi.fn(), error: vi.fn() } as any;
+
+    const indexer = new StellarIndexer({
+      ledger,
+      // The event is emitted by "CATTACKER", not the configured factory.
+      source: fakeSource([makeRaw({ contractId: "CATTACKER" })]),
+      decoder: fakeDecoder({
+        type: "fpooldep",
+        salt: Buffer.from([1]),
+        pool_address: "CSPOOFED_POOL",
+        admin: "GATTACKER",
+        asset: "GATTACKER_ASSET",
+        wasm_hash: Buffer.from([1])
+      }),
+      logger,
+      factoryAddress: "CFACTORY"
+    });
+
+    const result = await indexer.tick();
+
+    expect(upsertPoolRegistryEntry).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ contractId: "CATTACKER", expectedFactoryAddress: "CFACTORY" }),
+      expect.stringContaining("spoofed")
+    );
+    // Cursor still advances so the (rejected) event isn't reprocessed forever.
+    expect(result.cursor).toBe("1");
+  });
+
+  // Fail-closed: no configured factory address means NO fpooldep event is
+  // ever trusted, not "trust whatever shows up."
+  it("rejects a fpooldep event when no factoryAddress is configured at all", async () => {
+    const upsertPoolRegistryEntry = vi.fn(async () => {});
+    const ledger = { upsertPoolRegistryEntry, reconcileEvent: vi.fn() } as any;
+    const logger = { warn: vi.fn(), info: vi.fn(), error: vi.fn() } as any;
+
+    const indexer = new StellarIndexer({
+      ledger,
+      source: fakeSource([makeRaw()]),
+      decoder: fakeDecoder({ type: "fpooldep", salt: Buffer.from([1]), pool_address: "CPOOL1", admin: "G", asset: "G", wasm_hash: Buffer.from([1]) }),
+      logger
+      // factoryAddress intentionally omitted.
+    });
+
+    await indexer.tick();
+    expect(upsertPoolRegistryEntry).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ contractId: "CFACTORY" }),
+      expect.stringContaining("no factoryAddress is configured")
+    );
   });
 });
 

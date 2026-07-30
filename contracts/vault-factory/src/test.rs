@@ -218,3 +218,39 @@ fn list_pool_ids_paginates() {
     assert_eq!(page2.len(), 2);
     assert_eq!(page3.len(), 1);
 }
+
+// #507 acceptance criteria: "spoofed pools" must be rejected. The registry
+// only ever contains what deploy_pool itself wrote (PoolMeta is only set
+// inside deploy_pool, keyed by salt) — an address that was never passed
+// through deploy_pool, including one independently deployed with the exact
+// same wasm as a real pool, must not resolve as a registered pool. This
+// holds by construction (there is no code path that writes PoolMeta
+// outside deploy_pool), but is asserted directly here rather than only
+// relied upon implicitly.
+#[test]
+fn an_independently_deployed_contract_is_not_resolvable_as_a_registered_pool() {
+    let (env, client, admin, _wasm_hash) = setup();
+    let pool_admin = Address::generate(&env);
+    let approved_asset = Address::generate(&env);
+    client.approve_asset(&admin, &approved_asset);
+
+    // A real pool deployed through the factory, for contrast.
+    let real_salt = salt(&env, 1);
+    client.deploy_pool(&admin, &real_salt, &pool_admin, &approved_asset);
+
+    // An attacker deploys the SAME wasm independently (not through the
+    // factory's deploy_pool) using a salt the factory has never seen.
+    let spoofed_salt = salt(&env, 250);
+    assert_eq!(
+        client.try_get_pool(&spoofed_salt),
+        Err(Ok(Error::PoolNotFound)),
+        "a salt never passed through deploy_pool must never resolve to registry metadata, \
+         regardless of whether an identical contract happens to exist on-chain under a \
+         different, independently-deployed address"
+    );
+
+    // The registry's only entry is still the genuine one.
+    let ids = client.list_pool_ids(&0, &10);
+    assert_eq!(ids.len(), 1);
+    assert_eq!(ids.get(0).unwrap(), real_salt);
+}

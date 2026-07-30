@@ -123,7 +123,12 @@ if (env.SOROBAN_RPC_URL && env.INDEXER_CONTRACT_IDS) {
     resolveContractIds: async () => {
       const registryAddresses = await indexerLedgerService.getActivePoolAddresses();
       return Array.from(new Set([...staticContractIds, ...registryAddresses]));
-    }
+    },
+    // #507: only a `fpooldep` event emitted by this exact contract is
+    // trusted into the pool registry — see stellarIndexer.ts's
+    // factoryAddress check ("spoofed pools" acceptance criterion). Left
+    // undefined (fail closed, events logged and skipped) if not configured.
+    factoryAddress: env.VAULT_FACTORY_ADDRESS
   });
 
   // Resume from the last persisted checkpoint instead of re-fetching from the

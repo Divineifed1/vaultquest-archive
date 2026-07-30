@@ -77,6 +77,18 @@ export interface StellarIndexerOptions {
    * for test doubles that don't.
    */
   resolveContractIds?: () => Promise<string[]>;
+  /**
+   * #507 — the one trusted vault-factory contract address. A `fpooldep`
+   * (pool-deployed) event is only routed to the pool registry when it was
+   * emitted BY this exact contract address (`raw.contractId`) — the event
+   * payload's own fields (pool_address/admin/asset/etc.) are otherwise
+   * fully attacker-controlled data, so trusting "any watched contract that
+   * emits a topic matching fpooldep" would let an unrelated/malicious
+   * contract spoof a pool into the registry (the acceptance criteria's
+   * "spoofed pools" scenario). When unset, fpooldep events are never
+   * auto-trusted and are logged instead — fail closed, not open.
+   */
+  factoryAddress?: string;
 }
 
 export interface SorobanRpcEventSourceOptions {
@@ -314,6 +326,34 @@ export class StellarIndexer {
       // pool. Route it to the registry upsert instead of reconcileEvent,
       // which would otherwise park it as an orphaned pendingEvent forever.
       if (payload.type === FACTORY_POOL_DEPLOYED_EVENT_TYPE && statusHint === "confirmed") {
+        // #507 "spoofed pools": only trust this event if it was emitted BY
+        // the configured, known vault-factory contract address. Without
+        // this check, ANY contract in the watched set emitting a
+        // topic-matching fpooldep event — including a malicious or
+        // unrelated contract — would get its (fully attacker-controlled)
+        // payload fields upserted into the registry as if it were a
+        // genuine factory deployment. Fails closed: if factoryAddress
+        // isn't configured, or doesn't match the emitting contract, the
+        // event is logged and skipped rather than trusted.
+        if (!this.opts.factoryAddress) {
+          this.opts.logger?.warn(
+            { txHash: raw.txHash, contractId: raw.contractId },
+            "indexer: received fpooldep event but no factoryAddress is configured — refusing to trust it, skipping"
+          );
+          this.cursor = raw.id;
+          latestLedger = raw.ledger;
+          continue;
+        }
+        if (raw.contractId !== this.opts.factoryAddress) {
+          this.opts.logger?.warn(
+            { txHash: raw.txHash, contractId: raw.contractId, expectedFactoryAddress: this.opts.factoryAddress },
+            "indexer: received fpooldep event from a contract that is NOT the configured vault-factory — possible spoofed pool, skipping"
+          );
+          this.cursor = raw.id;
+          latestLedger = raw.ledger;
+          continue;
+        }
+
         try {
           // `salt`/`wasm_hash` are BytesN<32> on-chain; scValToNative
           // decodes those to Buffers, not strings — hex-encode them so the

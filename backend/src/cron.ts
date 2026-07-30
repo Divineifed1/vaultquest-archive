@@ -16,6 +16,13 @@ import { LeaseService } from "./services/leaseService.js";
 // specific process instance.
 const WORKER_ID = `${process.env.HOSTNAME ?? "worker"}-${randomUUID().slice(0, 8)}`;
 
+// #506 — heartbeat interval as a fraction of a job's TTL. Renewing at 1/3
+// of the TTL gives up to two missed heartbeats of slack (e.g. a transient
+// DB blip) before the lease can actually lapse, while still renewing
+// often enough that a long-running tick's lease essentially never expires
+// out from under it while the tick is genuinely still alive.
+const HEARTBEAT_FRACTION = 3;
+
 /**
  * Runs `fn` only if `jobName`'s lease is successfully acquired for this
  * process — i.e. no other worker currently holds an unexpired lease for
@@ -24,6 +31,18 @@ const WORKER_ID = `${process.env.HOSTNAME ?? "worker"}-${randomUUID().slice(0, 8
  * of the same job) never run concurrently. The lease is intentionally
  * NOT released on failure — see LeaseService.releaseJobLease's comment —
  * so a crashed tick forces a cooldown instead of an immediate retry loop.
+ *
+ * While `fn` runs, a heartbeat periodically renews the lease (guarded by
+ * both workerId and fencingToken — see LeaseService.renewJobLease) so a
+ * tick that legitimately runs longer than the TTL never loses its lease
+ * to a takeover while it's still alive and making progress. If a
+ * heartbeat renewal ever fails (lease already expired and taken over by
+ * another worker — real split-brain risk, not a transient blip), this
+ * worker no longer holds the lease and must stop treating itself as the
+ * owner: the heartbeat sets a flag that fn can't directly observe today
+ * (job bodies aren't yet fencing-token-aware per call), so at minimum we
+ * stop renewing and surface it loudly in logs rather than silently
+ * continuing as if nothing happened.
  */
 async function withJobLease(
   leases: LeaseService,
@@ -38,10 +57,48 @@ async function withJobLease(
     return;
   }
 
+  let fencingToken = handle.fencingToken;
+  let lostLease = false;
+  const heartbeat = setInterval(() => {
+    void (async () => {
+      const renewed = await leases.renewJobLease(jobName, WORKER_ID, fencingToken, ttlMs).catch((err) => {
+        logger.warn({ jobName, err }, "job lease heartbeat renewal errored");
+        return false;
+      });
+      if (!renewed) {
+        if (!lostLease) {
+          lostLease = true;
+          logger.error(
+            { jobName },
+            "job lease heartbeat failed to renew — lease was taken over by another worker while this tick is still running"
+          );
+        }
+        return;
+      }
+      // A successful renewal under the *same* fencing token confirms no
+      // takeover happened; the token itself doesn't change on renewal
+      // (only on acquisition/takeover), so it stays valid for the next
+      // heartbeat unchanged.
+    })();
+  }, Math.max(1000, Math.floor(ttlMs / HEARTBEAT_FRACTION)));
+  // Don't let the heartbeat timer keep the process alive on its own.
+  heartbeat.unref?.();
+
   try {
     await fn();
+    clearInterval(heartbeat);
+    if (lostLease) {
+      // The lease was taken over mid-tick and another worker may already
+      // be running (or about to run) the same job — do not release,
+      // since releasing now could hand a "clean" lease straight to that
+      // other worker while this tick's just-committed side effects are
+      // still settling. Let expiry/normal takeover handle it.
+      logger.warn({ jobName }, "job tick completed after losing its lease mid-run; not releasing");
+      return;
+    }
     await leases.releaseJobLease(jobName, WORKER_ID);
   } catch (err) {
+    clearInterval(heartbeat);
     logger.error({ jobName, err }, "job tick failed while holding lease");
     // Deliberately not released — see releaseJobLease's doc comment.
     throw err;

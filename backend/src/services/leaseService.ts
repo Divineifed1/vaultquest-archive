@@ -78,13 +78,33 @@ export class LeaseService {
 
   /**
    * Extends an already-held lease's expiry. Only succeeds if `workerId`
-   * still matches the current holder — a worker that lost the lease to a
-   * takeover cannot renew it back into existence.
+   * still matches the current holder AND `fencingToken` still matches the
+   * lease's current token AND the lease has not already expired.
+   *
+   * All three checks matter: matching `workerId` alone is not enough — if
+   * this worker's lease already lapsed (e.g. a GC pause stalled the
+   * process past its TTL) but no other worker has taken over *yet*, a
+   * naive `WHERE jobName AND workerId` update would silently "renew" an
+   * already-dead lease, defeating the entire point of expiry-based
+   * takeover safety: a lease that expired must never be resurrected by
+   * its own former holder, only re-acquired via acquireJobLease's
+   * explicit takeover path (which bumps the fencing token). Checking
+   * `fencingToken` too closes the narrower race where a takeover commits
+   * between this worker's own expiry and its renewal attempt — the
+   * fencing token will already have moved, so the conditional update's
+   * WHERE clause excludes the row even if `expiresAt` and `workerId`
+   * checks alone would have raced.
    */
-  async renewJobLease(jobName: string, workerId: string, ttlMs: number): Promise<boolean> {
+  async renewJobLease(
+    jobName: string,
+    workerId: string,
+    fencingToken: bigint,
+    ttlMs: number
+  ): Promise<boolean> {
+    const now = new Date();
     const expiresAt = new Date(Date.now() + ttlMs);
     const result = await this.prisma.jobLease.updateMany({
-      where: { jobName, workerId },
+      where: { jobName, workerId, fencingToken, expiresAt: { gt: now } },
       data: { expiresAt }
     });
     return result.count > 0;
